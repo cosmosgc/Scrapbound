@@ -18,9 +18,14 @@ import { BotInspector } from './bot-inspector.js';
 import './toy-factory.css';
 import { enhanceResearch } from './workshop-tools.js';
 import './workshop-tools.css';
+import { Operations, BuddyStyle } from './operations.js';
+import './operations.css';
 
 const economy = new Economy();
 const progression = new FactoryProgression(economy, () => render(), message => toast(message));
+const operations = new Operations(economy, () => render(), message => toast(message));
+const buddyStyle = new BuddyStyle(economy, () => render(), message => toast(message));
+operations.bind(document.getElementById('factory-contract'));
 let accessibilitySettings = { reducedMotion: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false, renderQuality: 'high' };
 try { accessibilitySettings = { ...accessibilitySettings, ...JSON.parse(localStorage.getItem('scrapbound.accessibility.v1') || '{}') }; } catch {}
 const scene = new FactoryScene(document.getElementById('factory-scene'), {
@@ -578,6 +583,7 @@ async function loadGameCatalog() {
   if (!response.ok || !response.catalog) return;
   const catalog = response.catalog;
   technologyPreview = (catalog.technologyNodes || []).map(node => ({ ...node, owned: false, available: false }));
+  renderTechnologyTree();
   setEconomyCatalog(catalog); setSimulationCatalog(catalog);
   simulation.setResourceDefinitions(catalog.resources || []);
   if (Array.isArray(catalog.items) && catalog.items.length) items.splice(0, items.length, ...catalog.items);
@@ -979,11 +985,13 @@ function renderTechnologyTree() {
     return;
   }
   const nodes = account ? technologyState.nodes || [] : technologyPreview;
+  if (!account && !nodes.length) { host.innerHTML = '<div class="panel-note">Loading the technology discovery map…</div>'; delete host.dataset.renderKey; return; }
   const renderKey = JSON.stringify([!!account, nodes, economy.state.credits, economy.state.scrap]);
   if (host.dataset.renderKey === renderKey) return;
   host.dataset.renderKey = renderKey;
   if (!nodes.length) {
     host.innerHTML = '<div class="panel-note">No technology nodes are published yet.</div>';
+    delete host.dataset.renderKey;
     return;
   }
   const byId = new Map(nodes.map(node => [node.id, node]));
@@ -1203,6 +1211,9 @@ function render() {
   updateProgramTargets();
   const snapshot = simulation.snapshot();
   scene.setSimulation(snapshot);
+  operations.update(snapshot);
+  operations.render($('factory-contract'), account);
+  buddyStyle.render($('buddy-style-shop'), scene, inspector.selected, account);
   progression.render(snapshot, account);
   inspector.render(snapshot);
   $('scene-credits').textContent = compact(displayValues.credits);

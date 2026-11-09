@@ -110,7 +110,7 @@ export class Economy {
     if (!gain) return 0;
     this.state.shards += gain;
     this.state.prestigeCount += 1;
-    const keep = { shards: this.state.shards, prestigeCount: this.state.prestigeCount, version: 2 };
+    const keep = { shards: this.state.shards, prestigeCount: this.state.prestigeCount, version: 2, cosmetics: this.state.cosmetics || [], buddyColor: this.state.buddyColor || 'mint' };
     Object.assign(this.state, freshSave(), keep);
     this.persist();
     return gain;

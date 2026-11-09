@@ -48,7 +48,7 @@ export function bindCatalogToolbar(host) {
       section.hidden=!!query&&!found&&!section.querySelector('summary').textContent.toLowerCase().includes(query);if(query&&!section.hidden)section.open=true;
     });host.querySelector('.studio-empty').hidden=!query||count>0;
   });
-  host.querySelectorAll('[data-studio-expand]').forEach(button=>button.addEventListener('click',()=>host.querySelectorAll('details').forEach(details=>details.open=button.dataset.studioExpand==='true')));
+  host.querySelectorAll('[data-studio-expand]').forEach(button=>button.addEventListener('click',()=>host.querySelectorAll('.studio-sections details').forEach(details=>details.open=button.dataset.studioExpand==='true')));
   host.querySelectorAll('[data-studio-section]').forEach(button=>button.addEventListener('click',()=>{
     const section=[...host.querySelectorAll('[data-editor-section]')].find(s=>s.dataset.editorSection===button.dataset.studioSection);
     if(section){section.hidden=false;section.open=true;section.scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});}

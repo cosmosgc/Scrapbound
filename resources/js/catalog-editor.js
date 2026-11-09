@@ -73,11 +73,11 @@ export function renderCatalogEditor(host, content, onlySection = null) {
   const sections = onlySection ? [onlySection] : Object.keys(content);
   const openEntries = new Set([...(host.querySelectorAll?.('.structured-entry[open]') || [])].map(entry => entry.querySelector('input[data-editor-path]')?.value));
   const search = host.querySelector?.('[data-studio-search]')?.value || '';
-  host.innerHTML = catalogToolbar(content, onlySection) + sections.filter(key => Object.hasOwn(content, key)).map(key => {
+  host.innerHTML = `${catalogToolbar(content, onlySection)}<div class="studio-sections">${sections.filter(key => Object.hasOwn(content, key)).map(key => {
     const value = content[key];
     const count = Array.isArray(value) ? ` · ${value.length} entries` : '';
     return `<details class="structured-section" open data-editor-section="${escapeHtml(key)}"><summary><strong>${escapeHtml(label(key))}</strong><span>${escapeHtml(key)}${count}</span></summary><div class="structured-section-body">${renderValue(value, key, [key], content)}${Array.isArray(value) && (!value.length || !value.every(entry => entry && typeof entry === 'object' && !Array.isArray(entry))) ? `<button type="button" class="button button-secondary" data-editor-op="add" data-editor-path="${pathAttribute([key])}">＋ Add ${escapeHtml(label(key).replace(/s$/, ''))}</button>` : ''}</div></details>`;
-  }).join('');
+  }).join('')}</div>`;
   bindCatalogToolbar(host);
   host.querySelectorAll?.('.structured-entry').forEach(entry => { entry.open = openEntries.has(entry.querySelector('input[data-editor-path]')?.value); });
   const searchInput = host.querySelector?.('[data-studio-search]');

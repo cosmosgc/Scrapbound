@@ -151,6 +151,12 @@ export class FactoryScene {
     const point=ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),0),new THREE.Vector3());
     if(point)this.onGroundClick?.(point.x,point.z);
   }
+  setBuddyStyle(color='mint', cosmetics=[]) {
+    if(!this.available)return;
+    const palette={mint:'#58cc91',berry:'#f278aa',sunshine:'#f5c94e',ocean:'#53a9ef',lilac:'#a582eb'};
+    const tint=palette[color]||palette.mint,owned=new Set(cosmetics);
+    for(const bot of this.bots){const d=bot.userData;d.chassis.material.color.set(tint);d.cap.visible=owned.has('cap');d.star.visible=owned.has('antenna');d.trail.visible=owned.has('trail');}
+  }
   setTechnology(unlocks=[]) {
     this.technologyUnlocks=new Set(unlocks);if(!this.available)return;
     for(const [id,mesh]of this.technologyMeshes)mesh.visible=this.technologyUnlocks.has(id);

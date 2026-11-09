@@ -16,7 +16,7 @@ export function label(text, color = '#365776', width = 256) {
 export function createRobot(robot) {
   const root = new THREE.Group(), color = BOT_COLORS[robot.kind] || BOT_COLORS.scavenger;
   const wide = robot.kind === 'cargo_hauler';
-  box(root, [wide ? 1.1 : .75, .48, .78], [0, .62, 0], color);
+  const chassis = box(root, [wide ? 1.1 : .75, .48, .78], [0, .62, 0], color);
   box(root, [.62, .46, .5], [0, 1.08, .12], '#f3f6ff');
   box(root, [.51, .27, .04], [0, 1.1, .39], '#304868');
   for (const x of [-.14, .14]) box(root, [.09, .09, .035], [x, 1.13, .42], '#aaf5fa');
@@ -46,7 +46,10 @@ export function createRobot(robot) {
   for (let i=0;i<4;i++) box(cargo,[.23,.23,.23],[(i%2-.5)*.26,.99+Math.floor(i/2)*.24,-.35],'#ffcd68');
   cargo.visible = false;
   const badge = label(`${robot.id + 1}`, '#365776', 80); badge.position.y = 2.05; root.add(badge);
-  root.userData = { id: robot.id, kind: robot.kind, tool, wheels, cargo, badge, target: new THREE.Vector3(robot.x || 0, 0, robot.z || 0) };
+  const cap=box(root,[.62,.2,.58],[0,1.42,.12],'#ef7187'); cap.userData.cosmetic='cap';
+  const star=new THREE.Mesh(new THREE.IcosahedronGeometry(.22,0),new THREE.MeshStandardMaterial({color:'#ffce4f',emissive:'#ffce4f',emissiveIntensity:.5}));star.position.set(0,1.72,.12);root.add(star);star.userData.cosmetic='antenna';
+  const trail=new THREE.Group();['#ff718a','#ffcf58','#72d9b4'].forEach((c,i)=>{const bead=new THREE.Mesh(new THREE.SphereGeometry(.13,8,6),new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:.2}));bead.position.set((i-1)*.23,.34,-.68);trail.add(bead);});trail.visible=false;root.add(trail);
+  root.userData = { id: robot.id, kind: robot.kind, tool, wheels, cargo, badge, chassis, cap, star, trail, target: new THREE.Vector3(robot.x || 0, 0, robot.z || 0) };
   root.position.copy(root.userData.target);
   return root;
 }
