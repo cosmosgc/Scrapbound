@@ -8,14 +8,19 @@ use App\Models\CommunityReply;
 use App\Models\RobotSimulationRunReceipt;
 use App\Models\User;
 use App\Services\CommunityModerationService;
+use App\Services\CooperativeJobService;
 use App\Services\CurrencyLedger;
 use App\Services\GameCatalog;
 use App\Services\GameCatalogStudio;
+use App\Services\ItemTradeService;
 use App\Services\PlayerBattleService;
 use App\Services\PlayerJobService;
+use App\Services\PlayerInventory;
+use App\Services\PlayerIdleProgressService;
 use App\Services\PlayerMissionService;
 use App\Services\PlayerPveBattleService;
 use App\Services\RobotSimulationResolver;
+use App\Services\TechnologyTreeService;
 use DomainException;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
@@ -50,8 +55,18 @@ class ScrapboundController extends Controller
             return match ($request->query('action')) {
                 'status' => $this->status(),
                 'wallet' => $this->wallet(),
+                'inventory' => $this->inventory(),
+                'trade_players' => $this->tradePlayers(),
+                'item_trades' => $this->itemTrades(),
+                'item_trade_create' => $this->itemTradeCreate($request),
+                'item_trade_accept' => $this->itemTradeAccept($request),
+                'item_trade_decline' => $this->itemTradeDecline($request),
+                'item_trade_cancel' => $this->itemTradeCancel($request),
                 'wallet_spend' => $this->walletSpend($request),
                 'robot_simulate' => $this->robotSimulate($request),
+                'idle_settle' => $this->idleSettle($request),
+                'technology' => $this->technology(),
+                'technology_purchase' => $this->technologyPurchase($request),
                 'catalog' => $this->catalog(),
                 'catalog_studio' => $this->catalogStudio(),
                 'catalog_preview' => $this->catalogPreview($request),
@@ -75,6 +90,10 @@ class ScrapboundController extends Controller
                 'pve_history' => $this->pveHistory(),
                 'mission_start' => $this->missionStart($request),
                 'mission_claim' => $this->missionClaim($request),
+                'cooperative_jobs' => $this->cooperativeJobs(),
+                'cooperative_create' => $this->cooperativeCreate($request),
+                'cooperative_join' => $this->cooperativeJoin($request),
+                'cooperative_leave' => $this->cooperativeLeave($request),
                 'community_feed' => $this->feed(),
                 'register' => $this->register($request),
                 'login' => $this->login($request),
@@ -124,6 +143,76 @@ class ScrapboundController extends Controller
         return $this->result(['ok' => true, 'wallet' => ['credits' => $wallet->credits, 'scrap' => $wallet->scrap], 'entries' => $entries]);
     }
 
+    private function inventory(): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to view your item inventory.');
+        return $this->result(app(PlayerInventory::class)->overview(Auth::user()));
+    }
+
+    private function tradePlayers(): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to browse trade partners.');
+        return $this->result(['ok' => true, 'players' => app(ItemTradeService::class)->players(Auth::user())]);
+    }
+
+    private function itemTrades(): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to view item trades.');
+        return $this->result(app(ItemTradeService::class)->overview(Auth::user()));
+    }
+
+    private function itemTradeCreate(Request $request): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to create an item trade.');
+        $data = $request->validate([
+            'recipient_id' => ['required', 'integer', 'exists:users,id'], 'item_id' => ['required', 'regex:/^[a-z][a-z0-9_]{1,39}$/'],
+            'quantity' => ['required', 'integer', 'min:1', 'max:1000'], 'credit_price' => ['required', 'integer', 'min:1', 'max:1000000'],
+            'request_key' => ['required', 'string', 'regex:/^[A-Za-z0-9._:-]{8,64}$/'],
+        ]);
+        if ($limited = $this->limitCommunityAction(Auth::user(), 'item-trade-create', 5, 3600)) return $limited;
+        try {
+            $outcome = app(ItemTradeService::class)->create(Auth::user(), (int) $data['recipient_id'], $data['item_id'],
+                (int) $data['quantity'], (int) $data['credit_price'], $data['request_key']);
+        } catch (DomainException $exception) {
+            return $this->result(['ok' => false, 'error' => $exception->getMessage()], 409);
+        }
+        return $this->result(['ok' => true, ...$outcome], $outcome['replayed'] ? 200 : 201);
+    }
+
+    private function itemTradeAccept(Request $request): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to accept an item trade.');
+        $data = $request->validate(['trade_id' => ['required', 'integer', 'min:1']]);
+        if ($limited = $this->limitCommunityAction(Auth::user(), 'item-trade-accept', 10, 3600)) return $limited;
+        try { $outcome = app(ItemTradeService::class)->accept(Auth::user(), (int) $data['trade_id']); }
+        catch (InsufficientFundsException) { return $this->result(['ok' => false, 'error' => 'Insufficient credits to accept this offer.'], 409); }
+        catch (DomainException $exception) { return $this->result(['ok' => false, 'error' => $exception->getMessage()], 409); }
+        if (isset($outcome['error'])) return $this->result(['ok' => false, 'error' => $outcome['error']], 409);
+        return $this->result(['ok' => true, ...$outcome]);
+    }
+
+    private function itemTradeDecline(Request $request): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to decline an item trade.');
+        $data = $request->validate(['trade_id' => ['required', 'integer', 'min:1']]);
+        if ($limited = $this->limitCommunityAction(Auth::user(), 'item-trade-decline', 10, 3600)) return $limited;
+        try { $outcome = app(ItemTradeService::class)->decline(Auth::user(), (int) $data['trade_id']); }
+        catch (DomainException $exception) { return $this->result(['ok' => false, 'error' => $exception->getMessage()], 409); }
+        if (isset($outcome['error'])) return $this->result(['ok' => false, 'error' => $outcome['error']], 409);
+        return $this->result(['ok' => true, ...$outcome]);
+    }
+
+    private function itemTradeCancel(Request $request): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to cancel an item trade.');
+        $data = $request->validate(['trade_id' => ['required', 'integer', 'min:1']]);
+        if ($limited = $this->limitCommunityAction(Auth::user(), 'item-trade-cancel', 10, 3600)) return $limited;
+        try { $outcome = app(ItemTradeService::class)->cancel(Auth::user(), (int) $data['trade_id']); }
+        catch (DomainException $exception) { return $this->result(['ok' => false, 'error' => $exception->getMessage()], 409); }
+        if (isset($outcome['error'])) return $this->result(['ok' => false, 'error' => $outcome['error']], 409);
+        return $this->result(['ok' => true, ...$outcome]);
+    }
+
     private function walletSpend(Request $request): JsonResponse
     {
         abort_unless(Auth::check(), 401, 'Sign in to spend currency.');
@@ -165,6 +254,7 @@ class ScrapboundController extends Controller
 
         return DB::transaction(function () use ($user, $data, $rateKey): JsonResponse {
             User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
+            $idleState = app(PlayerIdleProgressService::class)->stateForLockedUser($user);
             $jobState = app(PlayerJobService::class)->jobs($user);
             $owned = ['scavenger' => 0, 'scrap_hound' => 0, 'fabricator' => 0];
             $unitPrograms = [];
@@ -173,7 +263,8 @@ class ScrapboundController extends Controller
                 $unitPrograms[(int) $robot['id']] = $robot['program'];
             }
             $input = [
-                'seed' => (int) $data['seed'], 'ticks' => (int) $data['ticks'],
+                // Keep online runs on the server-owned world seed used for offline catch-up.
+                'seed' => (int) $idleState->world_seed, 'ticks' => (int) $data['ticks'],
                 'assignments' => ['crew' => [], 'units' => $unitPrograms], 'owned' => $owned,
             ];
             $inputHash = hash('sha256', json_encode($this->canonicalize($input), JSON_THROW_ON_ERROR));
@@ -192,9 +283,11 @@ class ScrapboundController extends Controller
             }
             RateLimiter::hit($rateKey, 60);
 
+            $catalog = app(GameCatalog::class)->active();
             $resolved = app(RobotSimulationResolver::class)->resolve(
                 $owned,
-                $input['assignments'], $input['seed'], $input['ticks'], [], app(GameCatalog::class)->active()['rewards'],
+                $input['assignments'], $input['seed'], $input['ticks'], [], $catalog['rewards'],
+                $catalog['resources'], app(TechnologyTreeService::class)->effectsFor($user),
             );
             $ledger = app(CurrencyLedger::class);
             $wallet = $ledger->walletFor($user);
@@ -209,7 +302,7 @@ class ScrapboundController extends Controller
 
             $result = [
                 'ok' => true,
-                'core_version' => 1,
+                'core_version' => 5,
                 'seed' => $input['seed'],
                 'ticks' => $input['ticks'],
                 'payouts' => $resolved['payouts'],
@@ -219,9 +312,44 @@ class ScrapboundController extends Controller
             RobotSimulationRunReceipt::create([
                 'user_id' => $user->id, 'run_key' => $data['run_key'], 'input_hash' => $inputHash, 'result' => $result,
             ]);
+            $idleState->last_settled_at = now();
+            $idleState->save();
 
             return $this->result([...$result, 'replayed' => false]);
         });
+    }
+
+    private function idleSettle(Request $request): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to settle offline robot progress.');
+        $data = $request->validate([
+            'request_key' => ['required', 'string', 'regex:/^[A-Za-z0-9._:-]{8,40}$/'],
+        ]);
+
+        return $this->result(app(PlayerIdleProgressService::class)->settle(Auth::user(), $data['request_key']));
+    }
+
+    private function technology(): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to view technology research.');
+
+        return $this->result(app(TechnologyTreeService::class)->overview(Auth::user()));
+    }
+
+    private function technologyPurchase(Request $request): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to research technology.');
+        $data = $request->validate([
+            'node_id' => ['required', 'string', 'regex:/^[a-z][a-z0-9_]{1,39}$/'],
+            'request_key' => ['required', 'string', 'regex:/^[A-Za-z0-9._:-]{8,40}$/'],
+        ]);
+        try {
+            return $this->result(app(TechnologyTreeService::class)->purchase(Auth::user(), $data['node_id'], $data['request_key']));
+        } catch (InsufficientFundsException) {
+            return $this->result(['ok' => false, 'error' => 'Insufficient funds for that research node.'], 409);
+        } catch (DomainException $exception) {
+            return $this->result(['ok' => false, 'error' => $exception->getMessage()], 409);
+        }
     }
 
     private function catalog(): JsonResponse
@@ -478,11 +606,57 @@ class ScrapboundController extends Controller
         $data = $request->validate([
             'sector' => ['required', 'integer', 'min:1', 'max:100'],
             'run_key' => ['required', 'string', 'regex:/^[A-Za-z0-9._:-]{8,40}$/'],
+            'cooperative_job_id' => ['nullable', 'integer', 'min:1', 'exists:cooperative_jobs,id'],
         ]);
         try {
             return $this->result(['ok' => true, ...app(PlayerMissionService::class)->start(
-                Auth::user(), (int) $data['sector'], $data['run_key'],
+                Auth::user(), (int) $data['sector'], $data['run_key'], isset($data['cooperative_job_id']) ? (int) $data['cooperative_job_id'] : null,
             )]);
+        } catch (DomainException $exception) {
+            return $this->result(['ok' => false, 'error' => $exception->getMessage()], 409);
+        }
+    }
+
+    private function cooperativeJobs(): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to view cooperative jobs.');
+        return $this->result(app(CooperativeJobService::class)->overview(Auth::user()));
+    }
+
+    private function cooperativeCreate(Request $request): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to create a cooperative job.');
+        $data = $request->validate(['sector' => ['required', 'integer', 'min:1', 'max:100'], 'goal' => ['required', 'integer', 'min:2', 'max:4']]);
+        if ($limited = $this->limitCommunityAction(Auth::user(), 'cooperative-create', 3, 3600)) {
+            return $limited;
+        }
+        try {
+            return $this->result(['ok' => true, ...app(CooperativeJobService::class)->create(Auth::user(), (int) $data['sector'], (int) $data['goal'])], 201);
+        } catch (DomainException $exception) {
+            return $this->result(['ok' => false, 'error' => $exception->getMessage()], 409);
+        }
+    }
+
+    private function cooperativeJoin(Request $request): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to join a cooperative job.');
+        $data = $request->validate(['job_id' => ['required', 'integer', 'min:1']]);
+        if ($limited = $this->limitCommunityAction(Auth::user(), 'cooperative-join', 10, 3600)) {
+            return $limited;
+        }
+        try {
+            return $this->result(['ok' => true, ...app(CooperativeJobService::class)->join(Auth::user(), (int) $data['job_id'])]);
+        } catch (DomainException $exception) {
+            return $this->result(['ok' => false, 'error' => $exception->getMessage()], 409);
+        }
+    }
+
+    private function cooperativeLeave(Request $request): JsonResponse
+    {
+        abort_unless(Auth::check(), 401, 'Sign in to leave a cooperative job.');
+        $data = $request->validate(['job_id' => ['required', 'integer', 'min:1']]);
+        try {
+            return $this->result(['ok' => true, ...app(CooperativeJobService::class)->leave(Auth::user(), (int) $data['job_id'])]);
         } catch (DomainException $exception) {
             return $this->result(['ok' => false, 'error' => $exception->getMessage()], 409);
         }

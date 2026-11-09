@@ -16,6 +16,7 @@ class PlayerMissionService
         private readonly CurrencyLedger $ledger,
         private readonly GameCatalog $catalog,
         private readonly MissionResolver $resolver,
+        private readonly CooperativeJobService $cooperativeJobs,
     ) {}
 
     public function overview(User $user): array
@@ -46,9 +47,9 @@ class PlayerMissionService
         ];
     }
 
-    public function start(User $user, int $sector, string $runKey): array
+    public function start(User $user, int $sector, string $runKey, ?int $cooperativeJobId = null): array
     {
-        return DB::transaction(function () use ($user, $sector, $runKey): array {
+        return DB::transaction(function () use ($user, $sector, $runKey, $cooperativeJobId): array {
             User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
             $catalog = $this->catalog->active();
             $progress = PlayerMissionProgress::firstOrCreate(['user_id' => $user->id], ['unlocked_sector' => 1]);
@@ -61,8 +62,12 @@ class PlayerMissionService
             if (count($crew) < $catalog['missionRules']['minimumCrew']) {
                 throw new DomainException('Assign a valid program to at least one owned robot before launching a mission.');
             }
+            if ($cooperativeJobId !== null) {
+                $this->cooperativeJobs->attachMission($user, $cooperativeJobId, $sector);
+            }
             $inputHash = hash('sha256', json_encode([
                 'sector' => $sector,
+                'cooperative_job_id' => $cooperativeJobId,
                 'crew' => array_map(fn (array $robot) => [
                     'id' => $robot['id'], 'kind' => $robot['kind'], 'program_version' => $robot['program_version'],
                     'program' => $robot['program'],
@@ -92,12 +97,13 @@ class PlayerMissionService
             $now = now();
             $run = PlayerMissionRun::create([
                 'user_id' => $user->id,
+                'cooperative_job_id' => $cooperativeJobId,
                 'run_key' => $runKey,
                 'input_hash' => $inputHash,
                 'sector' => $sector,
                 'seed' => random_int(1, 4294967295),
                 'catalog_version' => $catalog['version'],
-                'catalog_snapshot' => ['rewards' => $catalog['rewards'], 'missionRules' => $catalog['missionRules']],
+                'catalog_snapshot' => ['rewards' => $catalog['rewards'], 'missionRules' => $catalog['missionRules'], 'inventoryItems' => $catalog['inventoryItems']],
                 'duration_seconds' => $duration,
                 'crew_snapshot' => $crew,
                 'status' => 'active',
@@ -139,12 +145,26 @@ class PlayerMissionService
                     );
                     $wallet = $mutation['wallet'];
                 }
+                $alloy = (int) ($catalog['rewards']['missionAlloy'] ?? 0);
+                if ($alloy > 0) {
+                    $inventory = app(PlayerInventory::class)->grant(
+                        $user, 'alloy', $alloy,
+                        'mission:'.substr(hash('sha256', $run->run_key.':alloy'), 0, 56),
+                        'mission_salvage', ['run_key' => $run->run_key, 'sector' => $run->sector],
+                        $catalog['inventoryItems'] ?? app(GameCatalog::class)->active()['inventoryItems'],
+                    );
+                    $result['inventory'] = $inventory['inventory'];
+                }
                 $progress = PlayerMissionProgress::firstOrCreate(['user_id' => $user->id], ['unlocked_sector' => 1]);
                 $progress->unlocked_sector = min(
                     (int) $catalog['missionRules']['maximumSector'],
                     max($progress->unlocked_sector, $run->sector + 1),
                 );
                 $progress->save();
+                $cooperative = $this->cooperativeJobs->contribute($user, $run);
+                if ($cooperative !== null) {
+                    $result['cooperative'] = $cooperative;
+                }
             }
 
             $result['run_key'] = $run->run_key;
@@ -184,6 +204,7 @@ class PlayerMissionService
     {
         return [
             'run_key' => $run->run_key, 'sector' => $run->sector, 'duration_seconds' => $run->duration_seconds,
+            'cooperative_job_id' => $run->cooperative_job_id,
             'started_at' => $run->started_at?->toIso8601String(), 'completes_at' => $run->completes_at?->toIso8601String(),
             'status' => $run->status,
         ];

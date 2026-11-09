@@ -1,8 +1,10 @@
 # Robot Factory — Game Plan
 
-> **Implementation status (2026-11-07):** Scrapbound is a Laravel 13 application (Blade routes, Laravel sessions/auth, Eloquent and migrations) with a Vite-built vanilla JavaScript/Three.js/Blockly client. Local playtest saves remain available to guests. Signed-in progression uses MySQL-backed wallets, robot jobs/programs, delivery-only server simulation, timed PvE missions, and NPC arena battles using saved PvP builds; outcomes and claims are server-authoritative and idempotent. No passive robot/offline currency accrual is implemented; community trades remain negotiation-only until inventory escrow exists.
+> **Implementation status (2026-11-08):** Scrapbound is a Laravel 13 application (Blade routes, Laravel sessions/auth, Eloquent and migrations) with a Vite-built vanilla JavaScript/Three.js/Blockly client. Local playtest saves remain available to guests. Signed-in progression uses MySQL-backed wallets, robot jobs/programs, delivery-only server simulation, timed PvE missions, shared cooperative salvage jobs, NPC arena battles using saved PvP builds, server-owned item inventory with escrow trades, a seeded multi-zone field, persistent technology, and bounded offline settlement. Deterministic multi-bot spacing and static obstacle-aware routing are implemented; advanced grid pathfinding and congestion behavior remain future work.
 
-> **Social direction:** accounts and a first shared community board are now part of the near-term product. Current posts support asking for help, proposing a trade, and recruiting collaborators. Trade posts coordinate offers only; actual item/currency transfer waits for server-authoritative inventory and escrow.
+> **Social direction:** accounts and a shared community board support asking for help, proposing negotiation posts, and recruiting collaborators. Targeted item-for-credit trades now use server-owned inventory, reserved escrow, atomic wallet settlement, and audit events.
+
+> **Expansion direction:** the next larger-world vision is documented in [EXPANSION_PLAN.md](EXPANSION_PLAN.md): a bigger seeded salvage field with a central delivery depot, deterministic bot collision avoidance, a multi-unlock technology tree, expanded admin content controls, and watchable Three.js PvE/PvP battles. This is proposed design, not current implementation status.
 
 ## Product direction
 
@@ -10,8 +12,9 @@ Turn Robot Battle Arena into a browser-based incremental automation game. Player
 
 ## Core player loop
 
-1. **Program and deploy** robot jobs; the Blockly instructions decide where bots go and what they collect.
-2. **Collect** credits and parts only when a robot returns salvage to the factory. No passive or offline currency is awarded.
+1. **Program and deploy** robot jobs; Blockly instructions decide where bots go and what they collect.
+2. **Collect and deliver** salvage: resources occupy random seeded grid cells, and bots return cargo to the central storage depot before credits or parts are paid.
+3. **Grow the operation** with technology unlocks that expand the field, add visible structures/resource families, and improve production. Bounded server-resolved offline bot work is being added, with rewards still gated on actual depot delivery.
 3. **Spend** delivered resources on robots, factory stations, upgrades, research, and Blockly brain templates.
 4. **Automate** jobs by editing and deploying reusable programs; robot count and robot type affect throughput/capacity.
 5. **Run missions**: later PvE contracts and arena tests should also be visible simulations governed by the deployed program and pay only on successful return.
@@ -66,13 +69,17 @@ No browser-submitted winner, damage, or currency total is trusted. Rate-limit ch
 
 Players can deploy the same robot and program build they use for PvP against server-controlled NPC opponents. This is a distinct battle mode, not a PvP defense snapshot or challenge, and never requires another pilot to be online. It reuses validated owned programs and the deterministic resolver; NPC configurations define difficulty tiers, combat stats, and win rewards. The selected build and NPC rules are snapshotted into private seeded receipts with a readable replay history. PvE results do not affect PvP season ratings, standings, or challenge cooldowns. Keep these battles distinct from timed salvage expeditions, which focus on crew deployment, sector progress, and resources.
 
+## Cooperative salvage jobs
+
+Signed-in pilots can create an open sector contract and form a party of at most four players. A party member contributes by completing one successful server-resolved mission for the contract's sector; the server snapshots the selected co-op job on mission launch and records each contribution once. When the configured contribution goal is met, each contributor receives the same fixed credit bonus through the currency ledger. Members can leave before contributing, but the owner cannot leave and contributors remain through settlement. In-app notifications show joins, progress, and completion. Co-op jobs do not move items/currency between players.
+
 ## Accounts and player community
 
 - Use simple callsign + password accounts, hashed server-side. Keep the first version password-only; do not collect email, real names, or unnecessary profile data.
 - Laravel authentication uses hashed passwords, same-origin session cookies, and CSRF protection for mutations. Spatie roles provide a server-side `player`/`moderator`/`admin` foundation; privileged tools still require explicit policies and tests. Sanctum token support is installed for potential non-browser clients, but no token endpoint is exposed while the browser uses sessions.
 - The community board supports public help requests, offers/wants, and collaboration plans; signed-in players can reply, express interest/join, and close their own post.
 - All posts and replies are public to board visitors. Do not add direct messages or expose personal contact information in this first version. Add report/block/moderation tools before opening beyond a trusted test group.
-- **Trade is negotiation-only for now.** Do not promise or perform resource transfers until inventory is server-authoritative. Later trades must use validated item ownership, atomic escrow, explicit confirmation by both players, expiry/cancel flows, and an immutable transaction log.
+- **Escrow trades are server-authoritative.** A seller targets one recipient and offers catalog-tradable items for credits; items are reserved at offer creation. Only the recipient can accept/decline and only the seller can cancel. Acceptance settles item and wallet mutations in one database transaction; expiry timestamps are checked when offers are viewed or acted on, and expired offers release escrow. Database triggers prohibit audit updates/deletes; no background scheduler is required for trade expiry.
 - Collaborations initially record interest and public discussion; they do not yet share robots, rewards, or account resources.
 
 ## Admin content studio

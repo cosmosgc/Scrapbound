@@ -8,14 +8,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class PlayerMissionRun extends Model
 {
     protected $fillable = [
-        'user_id', 'run_key', 'input_hash', 'sector', 'seed', 'catalog_version', 'catalog_snapshot', 'duration_seconds', 'crew_snapshot',
+        'user_id', 'cooperative_job_id', 'run_key', 'input_hash', 'sector', 'seed', 'catalog_version', 'catalog_snapshot', 'duration_seconds', 'crew_snapshot',
         'status', 'started_at', 'completes_at', 'claimed_at', 'result',
     ];
 
     protected function casts(): array
     {
         return [
-            'sector' => 'integer', 'seed' => 'integer', 'catalog_version' => 'integer', 'duration_seconds' => 'integer',
+            'sector' => 'integer', 'seed' => 'integer', 'catalog_version' => 'integer', 'duration_seconds' => 'integer', 'cooperative_job_id' => 'integer',
             'catalog_snapshot' => 'array', 'crew_snapshot' => 'array', 'result' => 'array', 'started_at' => 'datetime',
             'completes_at' => 'datetime', 'claimed_at' => 'datetime',
         ];

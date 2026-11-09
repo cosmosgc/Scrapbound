@@ -42,4 +42,24 @@ class GameCatalogTest extends TestCase
         $this->expectException(DomainException::class);
         app(GameCatalog::class)->validate($content);
     }
+
+    public function test_technology_catalog_rejects_prerequisite_cycles_and_unbounded_effects(): void
+    {
+        $content = config('scrapbound');
+        $content['technologyNodes'][0]['prerequisites'] = ['refinery'];
+        $this->expectException(DomainException::class);
+        app(GameCatalog::class)->validate($content);
+    }
+
+    public function test_catalog_normalizes_older_resource_definitions_and_bounds_respawn_effects(): void
+    {
+        $catalog = config('scrapbound');
+        unset($catalog['resources'][0]['respawnSeconds']);
+        $validated = app(GameCatalog::class)->validate($catalog);
+        $this->assertSame(5, $validated['resources'][0]['respawnSeconds']);
+
+        $catalog['technologyNodes'][0]['effects']['respawnTimeMultipliers'] = ['alloy' => 0];
+        $this->expectException(DomainException::class);
+        app(GameCatalog::class)->validate($catalog);
+    }
 }

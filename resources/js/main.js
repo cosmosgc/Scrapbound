@@ -9,6 +9,7 @@ import './simulation.css';
 import './simulation-controls.css';
 import './simulation-fallback.css';
 import './scene-experience.css';
+import './technology-tree.css';
 
 const economy = new Economy();
 let accessibilitySettings = { reducedMotion: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false, renderQuality: 'high' };
@@ -20,6 +21,8 @@ const scene = new FactoryScene(document.getElementById('factory-scene'), {
 let account = null;
 let localSimulationValues = { credits: economy.state.credits, scrap: economy.state.scrap };
 let localSimulationAccount = null;
+let worldSeed = crypto.getRandomValues(new Uint32Array(1))[0];
+let technologyState = null;
 const simulation = new SalvageSimulation((resource, amount) => {
   if (!account) {
     economy.deliver(resource, amount);
@@ -29,7 +32,7 @@ const simulation = new SalvageSimulation((resource, amount) => {
   if (['credits', 'scrap'].includes(resource) && Number.isFinite(amount) && amount > 0) {
     localSimulationValues[resource] += amount;
   }
-});
+}, { seed: worldSeed });
 simulation.syncCrew(economy.state.owned);
 simulation.setUpgrades(economy.state.bought);
 try {
@@ -47,6 +50,7 @@ let toastTimer;
 let csrfToken = null;
 let playerJobs = null;
 let playerMissionState = null;
+let selectedCooperativeJobId = null;
 let serverDeliveries = [];
 let serverSimulationStatus = '';
 let serverSimulationBusy = false;
@@ -147,6 +151,46 @@ async function apiRequest(action, method = 'GET', data = null) {
   } catch { return { ok: false, error: 'Cannot reach the Scrapbound server. Check Nginx/PHP and try again.' }; }
 }
 
+function renderInventory(data) {
+  $('inventory-items').innerHTML = data?.items?.length ? data.items.map(item => `<article class="battle-entry"><div><b>${safe(item.name)}</b><span>${item.available} available${item.reserved ? ` · ${item.reserved} reserved` : ''}</span><small>${item.quantity} owned${item.tradable ? ' · tradeable' : ''}</small></div></article>`).join('') : '<div class="panel-note">No catalog items yet. Successful salvage missions award items.</div>';
+  $('inventory-receipts').textContent = data?.receipts?.length ? `Latest item activity: ${data.receipts.map(receipt => `${receipt.action} ${receipt.quantity} ${receipt.item_id}`).join(' · ')}` : '';
+  const tradeable = (data?.items || []).filter(item => item.tradable && item.available > 0);
+  $('trade-item').innerHTML = tradeable.length ? tradeable.map(item => `<option value="${safe(item.id)}">${safe(item.name)} · ${item.available} available</option>`).join('') : '<option value="">No available tradeable items</option>';
+  $('trade-create').disabled = !account || !tradeable.length;
+}
+
+function renderItemTrades(trades, players) {
+  $('trade-recipient').innerHTML = players.length ? players.map(player => `<option value="${player.id}">${safe(player.username)}</option>`).join('') : '<option value="">No other pilots</option>';
+  $('trade-list').innerHTML = trades.length ? trades.map(trade => `<article class="battle-entry"><div><b>${safe(trade.seller)} offers ${trade.quantity} ${safe(trade.item_name)}</b><span>${safe(trade.recipient)} · ${trade.credit_price} credits · ${safe(trade.status)}</span><small>${trade.status === 'open' ? `Expires ${new Date(trade.expires_at).toLocaleString()}` : `Trade #${trade.id}`}</small></div><div>${trade.can_accept ? `<button class="button button-primary" data-trade-accept="${trade.id}">Accept</button><button class="button button-secondary" data-trade-decline="${trade.id}">Decline</button>` : ''}${trade.can_cancel ? `<button class="button button-secondary" data-trade-cancel="${trade.id}">Cancel</button>` : ''}</div></article>`).join('') : '<div class="panel-note">No item trade offers yet.</div>';
+  for (const [attribute, action] of [['data-trade-accept', 'item_trade_accept'], ['data-trade-decline', 'item_trade_decline'], ['data-trade-cancel', 'item_trade_cancel']]) {
+    $('trade-list').querySelectorAll(`[${attribute}]`).forEach(button => button.addEventListener('click', async () => {
+      button.disabled = true;
+      const result = await apiRequest(action, 'POST', { trade_id: Number(button.getAttribute(attribute)) });
+      $('trade-status').textContent = result.ok ? `Trade ${result.trade.status}.` : result.error || 'Trade action failed.';
+      await loadInventory();
+    }));
+  }
+}
+
+async function loadInventory() {
+  if (!account) { renderInventory(null); return; }
+  const [result, players, trades] = await Promise.all([apiRequest('inventory'), apiRequest('trade_players'), apiRequest('item_trades')]);
+  if (result.ok) renderInventory(result);
+  else $('inventory-items').textContent = result.error || 'Item inventory unavailable.';
+  if (players.ok && trades.ok) renderItemTrades(trades.trades, players.players);
+}
+
+$('inventory-refresh').addEventListener('click', loadInventory);
+$('trade-create').addEventListener('click', async () => {
+  if (!account) { openAuth('login'); return; }
+  const result = await apiRequest('item_trade_create', 'POST', {
+    recipient_id: Number($('trade-recipient').value), item_id: $('trade-item').value,
+    quantity: Number($('trade-quantity').value), credit_price: Number($('trade-price').value), request_key: crypto.randomUUID(),
+  });
+  $('trade-status').textContent = result.ok ? `Offer #${result.trade.id} created; the items are now reserved in escrow.` : result.error || 'Could not create trade offer.';
+  if (result.ok) await loadInventory();
+});
+
 function applyServerJobs(data) {
   playerJobs = data;
   const owned = { scavenger: 0, scrap_hound: 0, fabricator: 0 };
@@ -171,13 +215,51 @@ function applyServerJobs(data) {
 }
 
 async function loadPlayerJobs() {
-  if (!account) { playerJobs = null; playerMissionState = null; serverDeliveries = []; serverSimulationStatus = ''; walletSyncStatus = 'Not synced yet'; lastWalletSyncAt = 0; localSimulationAccount = null; localSimulationValues = { credits: economy.state.credits, scrap: economy.state.scrap }; render(); return; }
+  if (!account) { playerJobs = null; playerMissionState = null; technologyState = null; selectedCooperativeJobId = null; serverDeliveries = []; serverSimulationStatus = ''; walletSyncStatus = 'Not synced yet'; lastWalletSyncAt = 0; localSimulationAccount = null; localSimulationValues = { credits: economy.state.credits, scrap: economy.state.scrap }; render(); renderInventory(null); await loadCooperativeJobs(); return; }
   if (!localSaveCaptured) { localSaveBackup = localStorage.getItem('scrapbound.save.v1'); localSaveCaptured = true; }
   const result = await apiRequest('jobs');
   if (!result.ok) { toast(result.error || 'Could not load saved robot jobs.'); return; }
   applyServerJobs(result);
+  await settleOfflineProgress();
+  await loadInventory();
   lastWalletSyncAt = Date.now();
   await loadPlayerMissions();
+}
+
+async function settleOfflineProgress() {
+  if (!account) return;
+  const result = await apiRequest('idle_settle', 'POST', { request_key: crypto.randomUUID() });
+  if (!result.ok) {
+    serverSimulationStatus = `Offline progress unavailable: ${result.error || 'server response missing settlement.'}`;
+    render();
+    return false;
+  }
+  if (result.technology) {
+    technologyState = result.technology;
+    simulation.setResourceDefinitions(result.technology.resources || []);
+    simulation.setTechnologyEffects(result.technology.effects || {});
+    scene.setTechnology(result.technology.effects?.sceneUnlocks || []);
+  }
+  if (Number.isInteger(result.world_seed) && simulation.setWorldSeed(result.world_seed)) worldSeed = result.world_seed;
+  if (result.snapshot?.nodes) simulation.applyWorldSnapshot(result.snapshot.nodes);
+  scene.setSimulation(simulation.snapshot());
+  if (result.wallet) {
+    economy.state.credits = Number(result.wallet.credits);
+    economy.state.scrap = Number(result.wallet.scrap);
+    localSimulationValues = { credits: economy.state.credits, scrap: economy.state.scrap };
+  }
+  const payouts = (result.payouts || []).filter(payout => payout.amount > 0).map(payout => ({
+    resource: payout.resource, amount: payout.amount, cargo: payout.deliveries,
+    deliveryCount: payout.deliveries,
+  }));
+  if (payouts.length) serverDeliveries = [...payouts, ...serverDeliveries].slice(0, 3);
+  lastWalletSyncAt = Date.now();
+  const credited = Number(result.credited_seconds) || 0;
+  serverSimulationStatus = credited > 0
+    ? `Offline bots worked ${Math.floor(credited / 60)}m · ${payouts.reduce((sum, payout) => sum + payout.deliveryCount, 0)} depot deliveries${result.capped ? ' · catch-up capped' : ''}.`
+    : 'Offline systems ready · bots earn only after depot delivery.';
+  render();
+  return true;
 }
 
 async function syncServerWallet() {
@@ -208,8 +290,67 @@ async function loadPlayerMissions() {
   if (!result.ok) { toast(result.error || 'Could not load mission status.'); return; }
   playerMissionState = result;
   renderMissions();
+  await loadCooperativeJobs();
   await loadBattleArena();
 }
+
+async function loadCooperativeJobs() {
+  const list = $('cooperative-jobs');
+  if (!list) return;
+  if (!account) {
+    list.innerHTML = '<div class="panel-note">Sign in to create or join a co-op salvage job.</div>';
+    $('cooperative-notifications').innerHTML = '';
+    $('cooperative-create').disabled = true;
+    return;
+  }
+  $('cooperative-create').disabled = false;
+  const result = await apiRequest('cooperative_jobs');
+  if (!result.ok) { list.textContent = result.error || 'Co-op jobs unavailable.'; return; }
+  if (playerMissionState) playerMissionState.cooperative_jobs = result.jobs;
+  const sectors = (playerMissionState?.contracts || []).filter(contract => contract.unlocked);
+  $('cooperative-sector').innerHTML = sectors.map(contract => `<option value="${contract.sector}">Sector ${String(contract.sector).padStart(2, '0')}</option>`).join('') || '<option value="1">Sector 01</option>';
+  const open = result.jobs.filter(job => job.status === 'open' && Number(job.contribution || 0) === 0 && job.member_id);
+  if (selectedCooperativeJobId && !open.some(job => Number(job.id) === Number(selectedCooperativeJobId))) selectedCooperativeJobId = null;
+  list.innerHTML = result.jobs.length ? result.jobs.map(job => {
+    const isMember = !!job.member_id;
+    const contributed = Number(job.contribution || 0) > 0;
+    const selected = Number(selectedCooperativeJobId) === Number(job.id);
+    const roster = job.members.map(member => `${safe(member.username)}${member.contribution ? ' ✓' : ''}`).join(', ');
+    let action = '';
+    if (job.status === 'open' && !isMember) action = `<button class="button button-secondary" data-cooperative-join="${job.id}">Join</button>`;
+    else if (job.status === 'open' && isMember && !contributed) action = `<button class="button ${selected ? 'button-primary' : 'button-secondary'}" data-cooperative-select="${job.id}">${selected ? 'Selected' : 'Contribute'}</button>${Number(job.owner_id) !== Number(account.id) ? `<button class="button button-secondary" data-cooperative-leave="${job.id}">Leave</button>` : ''}`;
+    else if (contributed) action = '<span class="panel-note">Contribution recorded</span>';
+    return `<article class="battle-entry"><div><b>${safe(job.owner)} · Sector ${String(job.sector).padStart(2, '0')}</b><span>${job.progress}/${job.goal} contributions · ${job.status} · ${job.member_count}/4 pilots</span><small>${roster || 'No other pilots yet'}</small></div>${action}</article>`;
+  }).join('') : '<div class="panel-note">No co-op jobs yet. Start one and invite other pilots.</div>';
+  $('cooperative-notifications').innerHTML = result.notifications.length ? result.notifications.map(note => `<article class="battle-entry"><div><b>${safe(note.kind.replaceAll('_', ' '))}</b><span>${note.data.username ? `${safe(note.data.username)} · ` : ''}${note.data.progress ? `${note.data.progress}/${note.data.goal} contributions` : note.data.reward ? `Reward: ${note.data.reward} credits` : 'Co-op job update'}</span></div></article>`).join('') : '<div class="panel-note">No co-op notifications yet.</div>';
+  if (playerMissionState) renderServerMissions();
+  list.querySelectorAll('[data-cooperative-join]').forEach(button => button.addEventListener('click', async () => {
+    const joined = await apiRequest('cooperative_join', 'POST', { job_id: Number(button.dataset.cooperativeJoin) });
+    if (!joined.ok) { $('cooperative-notice').textContent = joined.error || 'Could not join that job.'; return; }
+    await loadCooperativeJobs();
+  }));
+  list.querySelectorAll('[data-cooperative-leave]').forEach(button => button.addEventListener('click', async () => {
+    const left = await apiRequest('cooperative_leave', 'POST', { job_id: Number(button.dataset.cooperativeLeave) });
+    if (!left.ok) { $('cooperative-notice').textContent = left.error || 'Could not leave that job.'; return; }
+    if (Number(selectedCooperativeJobId) === Number(button.dataset.cooperativeLeave)) selectedCooperativeJobId = null;
+    await loadCooperativeJobs();
+  }));
+  list.querySelectorAll('[data-cooperative-select]').forEach(button => button.addEventListener('click', async () => {
+    selectedCooperativeJobId = Number(button.dataset.cooperativeSelect);
+    $('cooperative-notice').textContent = 'Selected co-op job. Launch the matching sector mission below to contribute.';
+    await loadCooperativeJobs();
+  }));
+}
+
+$('cooperative-refresh').addEventListener('click', loadCooperativeJobs);
+$('cooperative-create').addEventListener('click', async () => {
+  if (!account) { openAuth('login'); return; }
+  const result = await apiRequest('cooperative_create', 'POST', { sector: Number($('cooperative-sector').value || 1), goal: Number($('cooperative-goal').value || 3) });
+  if (!result.ok) { $('cooperative-notice').textContent = result.error || 'Could not create a co-op job.'; return; }
+  selectedCooperativeJobId = result.job_id;
+  $('cooperative-notice').textContent = 'Co-op job created. Select its contract mission below to contribute.';
+  await loadCooperativeJobs();
+});
 
 async function loadBattleArena() {
   const list = $('battle-defenses');
@@ -317,7 +458,7 @@ async function runServerSimulation() {
   try {
     const result = await apiRequest('robot_simulate', 'POST', {
       run_key: `b:${crypto.randomUUID()}`,
-      seed: 7,
+      seed: worldSeed,
       ticks: Math.min(6000, 1200 * simulationSpeed),
     });
     if (!result.ok) {
@@ -328,6 +469,10 @@ async function runServerSimulation() {
       render();
       if (result.httpStatus !== 429) toast(result.error || 'Server simulation failed.');
       return;
+    }
+    if (result.snapshot?.nodes) {
+      simulation.applyWorldSnapshot(result.snapshot.nodes);
+      scene.setSimulation(simulation.snapshot());
     }
     if (Array.isArray(result.payouts) && result.payouts.length) {
       serverDeliveries = [...result.payouts.map(payout => ({
@@ -405,6 +550,7 @@ async function loadGameCatalog() {
   if (!response.ok || !response.catalog) return;
   const catalog = response.catalog;
   setEconomyCatalog(catalog); setSimulationCatalog(catalog);
+  simulation.setResourceDefinitions(catalog.resources || []);
   if (Array.isArray(catalog.items) && catalog.items.length) items.splice(0, items.length, ...catalog.items);
   if (Array.isArray(catalog.upgrades) && catalog.upgrades.length) upgrades.splice(0, upgrades.length, ...catalog.upgrades);
   render();
@@ -591,6 +737,47 @@ function renderUpgrades() {
   }));
 }
 
+function renderTechnologyTree() {
+  const host = $('technology-tree');
+  if (!account) {
+    host.innerHTML = '<div class="panel-note">Sign in to research persistent technologies that change resource spawns, delivery values, and the visible field.</div>';
+    return;
+  }
+  if (!technologyState) {
+    host.innerHTML = '<div class="panel-note">Loading server technology…</div>';
+    return;
+  }
+  const nodes = technologyState.nodes || [];
+  host.innerHTML = nodes.length ? nodes.map(node => {
+    const effects = node.effects || {};
+    const unlocks = [...(effects.unlockResources || []).map(id => `Unlocks ${id}`), ...(effects.unlockZones || []).map(id => `Opens ${id} zone`), ...(effects.sceneUnlocks || []).map(id => `Builds ${id.replaceAll('_', ' ')}`),
+      ...Object.entries(effects.spawnWeightMultipliers || {}).map(([id, multiplier]) => `${id} spawn ×${multiplier}`),
+      ...Object.entries(effects.deliveryValueMultipliers || {}).map(([id, multiplier]) => `${id} value ×${multiplier}`),
+      ...Object.entries(effects.stockMultipliers || {}).map(([id, multiplier]) => `${id} stock ×${multiplier}`),
+      ...Object.entries(effects.respawnTimeMultipliers || {}).map(([id, multiplier]) => `${id} restock time ×${multiplier}`)];
+    const prereqs = node.prerequisites?.length ? `Requires ${node.prerequisites.join(', ')}` : 'Foundation node';
+    const affordable = (economy.state[node.currency] || 0) >= node.cost;
+    return `<article class="technology-node ${node.owned ? 'technology-owned' : ''}"><div class="eyebrow">${node.owned ? 'RESEARCH COMPLETE' : node.available ? 'AVAILABLE RESEARCH' : 'LOCKED NODE'}</div><h3>${safe(node.name)}</h3><p>${safe(node.description)}</p><div class="technology-node-meta"><span>${safe(prereqs)}</span>${unlocks.map(effect => `<span>${safe(effect)}</span>`).join('')}</div>${node.owned ? '<span class="subtle">UNLOCKED</span>' : `<button class="button button-upgrade" data-tech-purchase="${safe(node.id)}" ${!node.available || !affordable ? 'disabled' : ''}>Research · ${node.cost} ${node.currency === 'credits' ? '¢' : '▧'}</button>`}</article>`;
+  }).join('') : '<div class="panel-note">No technology nodes are published yet.</div>';
+  host.querySelectorAll('[data-tech-purchase]').forEach(button => button.addEventListener('click', async () => {
+    if (!account || button.disabled) return;
+    button.disabled = true;
+    if (!await settleOfflineProgress()) { toast('Settle current bot deliveries before researching.'); return; }
+    const nodeId = button.dataset.techPurchase;
+    const result = await apiRequest('technology_purchase', 'POST', { node_id: nodeId, request_key: crypto.randomUUID() });
+    if (!result.ok) { toast(result.error || 'Research purchase failed.'); render(); return; }
+    technologyState = result.technology;
+    economy.state.credits = Number(result.wallet.credits);
+    economy.state.scrap = Number(result.wallet.scrap);
+    simulation.setResourceDefinitions(technologyState.resources || []);
+    simulation.setTechnologyEffects(technologyState.effects || {});
+    scene.setTechnology(technologyState.effects?.sceneUnlocks || []);
+    simulation.setWorldSeed(worldSeed);
+    render();
+    toast(`${result.technology.nodes.find(node => node.id === nodeId)?.name || 'Technology'} researched. New world content is active.`);
+  }));
+}
+
 function renderMissions() {
   if (account) {
     renderServerMissions();
@@ -643,7 +830,9 @@ function renderServerMissions() {
     const titleIndex = (sector - 1) % 3;
     const actionText = activeRun ? (ready ? 'Claim results' : `In progress · ${secondsLeft}s`) : locked ? 'Sector locked' : 'Launch mission';
     const disabled = missionBusy || (activeRun ? !ready : (!!active || locked || Number(state.crew_count) < Number(contract.crew_required)));
-    return `<article class="mission-card ${locked ? 'mission-locked' : ''}"><div class="mission-index">${String(sector).padStart(2, '0')}</div><div class="mission-main"><div class="eyebrow">${activeRun ? 'CREW DEPLOYED' : locked ? 'FRONTIER SIGNAL' : 'AVAILABLE CONTRACT'}</div><h3>${['Dustline salvage', 'Rusted relay', 'The green vault'][titleIndex]}</h3><p>${activeRun ? `Your ${state.crew_count} programmed robot(s) are on a server-timed ${contract.duration_seconds}-second deployment.` : ['Recover abandoned alloys from the outer debris field.', 'Search a collapsed comms station for usable components.', 'An overgrown depot may still have intact machine parts.'][titleIndex]}</p><div class="mission-rewards"><span>${activeRun ? `COMPLETES ${new Date(active.completes_at).toLocaleTimeString()}` : `~${contract.duration_seconds}s`}</span><b>¢ ${rewards.credits}</b><b>▧ ${rewards.scrap}</b></div></div><button class="button ${locked ? 'button-secondary' : 'button-primary'} mission-launch" data-server-mission="${sector}" ${activeRun ? `data-mission-claim="${safe(active.run_key)}"` : ''} ${disabled ? 'disabled' : ''}>${actionText} <span>→</span></button></article>`;
+    const cooperativeRun = activeRun && active.cooperative_job_id;
+    const selectedCoop = Number(selectedCooperativeJobId) > 0 && Number(state.cooperative_jobs?.find(job => Number(job.id) === Number(selectedCooperativeJobId))?.sector) === sector;
+    return `<article class="mission-card ${locked ? 'mission-locked' : ''}"><div class="mission-index">${String(sector).padStart(2, '0')}</div><div class="mission-main"><div class="eyebrow">${cooperativeRun ? 'CO-OP CREW DEPLOYED' : activeRun ? 'CREW DEPLOYED' : locked ? 'FRONTIER SIGNAL' : 'AVAILABLE CONTRACT'}</div><h3>${['Dustline salvage', 'Rusted relay', 'The green vault'][titleIndex]}</h3><p>${activeRun ? `Your ${state.crew_count} programmed robot(s) are on a server-timed ${contract.duration_seconds}-second deployment${cooperativeRun ? ' for the shared co-op contract' : ''}.` : ['Recover abandoned alloys from the outer debris field.', 'Search a collapsed comms station for usable components.', 'An overgrown depot may still have intact machine parts.'][titleIndex]}${selectedCoop && !activeRun ? ' · Selected co-op job contribution' : ''}</p><div class="mission-rewards"><span>${activeRun ? `COMPLETES ${new Date(active.completes_at).toLocaleTimeString()}` : `~${contract.duration_seconds}s`}</span><b>¢ ${rewards.credits}</b><b>▧ ${rewards.scrap}</b></div></div><button class="button ${locked ? 'button-secondary' : 'button-primary'} mission-launch" data-server-mission="${sector}" ${activeRun ? `data-mission-claim="${safe(active.run_key)}"` : ''} ${disabled ? 'disabled' : ''}>${actionText} <span>→</span></button></article>`;
   }).join('');
 
   document.querySelectorAll('[data-server-mission]').forEach(button => button.addEventListener('click', async () => {
@@ -659,11 +848,16 @@ function renderServerMissions() {
         const panel = $('mission-result');
         panel.classList.remove('hidden');
         panel.innerHTML = `<div class="eyebrow">${claimed.success ? 'EXPEDITION COMPLETE' : 'EXPEDITION RECOVERY'} · SECTOR ${String(claimed.sector).padStart(2, '0')}</div><h3>${claimed.success ? 'Salvage secured.' : 'The crew returned safely.'}</h3><p>${claimed.success ? `Your ${claimed.crew_count} robot crew earned <b>¢ ${claimed.rewards.credits}</b> and <b>▧ ${claimed.rewards.scrap}</b>.` : 'The mission encountered a hazard; no resources were awarded.'}</p><ol class="mission-replay">${claimed.events.map(event => `<li><time>${String(event.at_second).padStart(2, '0')}s</time> ${safe(event.label)}</li>`).join('')}</ol>`;
+        if (claimed.cooperative?.contributed) {
+          panel.insertAdjacentHTML('afterbegin', `<p class="panel-note">Co-op progress: ${claimed.cooperative.progress}/${claimed.cooperative.goal}${claimed.cooperative.completed ? ` · Contract complete · +${claimed.cooperative.reward_credits} bonus credits` : ' · Contribution recorded'}</p>`);
+        }
+        if (claimed.inventory) renderInventory(claimed.inventory);
         toast(claimed.success ? 'Mission rewards settled to your server wallet.' : 'Mission resolved without a payout.');
       } else {
         const started = await apiRequest('mission_start', 'POST', {
           sector: Number(button.dataset.serverMission),
           run_key: `m:${crypto.randomUUID()}`,
+          ...(selectedCooperativeJobId ? { cooperative_job_id: Number(selectedCooperativeJobId) } : {}),
         });
         if (!started.ok) { toast(started.error || 'Mission could not be launched.'); return; }
         toast(`Sector ${String(started.run.sector).padStart(2, '0')} crew deployed.`);
@@ -708,7 +902,7 @@ function render() {
     ? serverDeliveries
     : snapshot.events.filter(event => event.type === 'delivery').slice(-3).reverse();
   const deliveryRows = deliveries.length
-    ? `<div class="delivery-feed-title">${account ? 'SERVER-SETTLED DELIVERIES' : 'RECENT DELIVERIES'}</div>${deliveries.map(event => `<div class="delivery-event"><b>UNIT ${String(event.robotId + 1).padStart(2, '0')}</b><span>+${event.amount} ${safe(event.resource)}</span><small>${event.cargo} recovered</small></div>`).join('')}`
+    ? `<div class="delivery-feed-title">${account ? 'SERVER-SETTLED DELIVERIES' : 'RECENT DELIVERIES'}</div>${deliveries.map(event => `<div class="delivery-event"><b>${event.deliveryCount ? `${event.deliveryCount} depot runs` : `UNIT ${String(event.robotId + 1).padStart(2, '0')}`}</b><span>+${event.amount} ${safe(event.resource)}</span><small>${event.deliveryCount ? 'offline deliveries' : `${event.cargo} recovered`}</small></div>`).join('')}`
     : `<div class="delivery-feed-empty">${account ? serverSimulationStatus || 'No server run completed yet · delivery checks run while this page is visible and unpaused.' : 'No deliveries yet · return cargo to the bay to earn.'}</div>`;
   $('delivery-feed').innerHTML = `${deliveryRows}${account ? `<div class="delivery-feed-empty">${serverSimulationStatus || walletSyncStatus}</div><div class="delivery-feed-actions"><button class="button button-secondary" id="wallet-sync-now" ${walletSyncBusy ? 'disabled' : ''}>${walletSyncBusy ? 'Syncing…' : 'Sync wallet'}</button><label>Auto-sync <select id="wallet-sync-interval" aria-label="Wallet auto-sync interval"><option value="15" ${walletSyncIntervalSeconds === 15 ? 'selected' : ''}>15s</option><option value="30" ${walletSyncIntervalSeconds === 30 ? 'selected' : ''}>30s</option><option value="60" ${walletSyncIntervalSeconds === 60 ? 'selected' : ''}>60s</option><option value="0" ${walletSyncIntervalSeconds === 0 ? 'selected' : ''}>Off</option></select></label></div>` : ''}`;
   $('rank').textContent = s.prestigeCount ? `Ascendant ${s.prestigeCount}` : s.credits > 1500 ? 'Mechanic' : 'Rookie';
@@ -717,6 +911,7 @@ function render() {
   $('prestige-button').disabled = account || economy.shardPreview() < 1;
   $('prestige-button').innerHTML = account ? 'SERVER PROGRESSION NEXT' : economy.shardPreview() ? `Synthesize ${economy.shardPreview()} shard${economy.shardPreview() > 1 ? 's' : ''} <span>→</span>` : 'Reach 1,200 lifetime credits <span>→</span>';
   renderItems(); renderUpgrades(); renderMissions();
+  renderTechnologyTree();
 }
 
 function updateProgramTargets() {

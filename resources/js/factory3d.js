@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { salvageSitesForSeed } from './simulation.js';
+
+const salvageColor = resource => resource === 'credits' ? '#e5bd65' : resource === 'alloy' ? '#9c9ed9' : '#9c8870';
 
 export class FactoryScene {
   constructor(host, { reducedMotion = false, quality = 'high' } = {}) {
@@ -7,14 +10,16 @@ export class FactoryScene {
     this.quality = quality;
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#171914');
-    this.scene.fog = new THREE.Fog('#171914', 18, 40);
-    this.camera = new THREE.PerspectiveCamera(37, 1, .1, 80);
+    this.scene.fog = new THREE.Fog('#171914', 34, 90);
+    this.camera = new THREE.PerspectiveCamera(37, 1, .1, 120);
     this.cameraTarget = new THREE.Vector3(0, .6, 0);
     this.cameraGoal = this.cameraTarget.clone();
     this.cameraYaw = .53;
     this.cameraPitch = .48;
-    this.cameraDistance = 16;
+    this.cameraDistance = 27;
     this.followId = null;
+    this.technologyUnlocks = new Set();
+    this.technologyMeshes = new Map();
     try {
       this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     } catch {
@@ -64,9 +69,9 @@ export class FactoryScene {
     const key = new THREE.DirectionalLight('#ffe3b0', 3.4); key.position.set(-4, 10, 7); key.castShadow = true; key.shadow.mapSize.set(1024, 1024); this.scene.add(key);
     const fill = new THREE.PointLight('#91cdbb', 18, 20); fill.position.set(4, 3, -4); this.scene.add(fill);
 
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 30), new THREE.MeshStandardMaterial({ color: '#292b22', roughness: .92 }));
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(36, 24), new THREE.MeshStandardMaterial({ color: '#292b22', roughness: .92 }));
     floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; this.scene.add(floor);
-    const grid = new THREE.GridHelper(30, 30, '#565746', '#3a3b31'); grid.position.y = .018; this.scene.add(grid);
+    const grid = new THREE.GridHelper(32, 32, '#565746', '#3a3b31'); grid.scale.z = .75; grid.position.y = .018; this.scene.add(grid);
 
     const platform = new THREE.Mesh(new THREE.BoxGeometry(10, .28, 6), new THREE.MeshStandardMaterial({ color: '#3a3a2e', roughness: .72 }));
     platform.position.y = .15; platform.receiveShadow = true; platform.castShadow = true; this.scene.add(platform);
@@ -81,26 +86,63 @@ export class FactoryScene {
     this.addCrane(3.8, -1.8);
     this.addCrate(-4.7, 1.7, '#ad7a4f'); this.addCrate(4.35, 1.6, '#667858'); this.addCrate(-4.4, -2.6, '#667858');
     const beacon = new THREE.Mesh(new THREE.CylinderGeometry(.11, .17, 1.2, 8), new THREE.MeshStandardMaterial({ color: '#b4d17c', emissive: '#55732d', emissiveIntensity: 1.5 }));
-    beacon.position.set(0, 1.05, -2.3); this.scene.add(beacon);
-    const halo = new THREE.Mesh(new THREE.TorusGeometry(.34, .035, 8, 32), new THREE.MeshBasicMaterial({ color: '#d1e58f' })); halo.position.set(0, 1.6, -2.3); this.scene.add(halo);
+    beacon.position.set(0, 1.05, 0); this.scene.add(beacon);
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(1.15, .055, 8, 48), new THREE.MeshBasicMaterial({ color: '#d1e58f' })); halo.rotation.x = Math.PI / 2; halo.position.set(0, .22, 0); this.scene.add(halo);
+    const depot = new THREE.Mesh(new THREE.CylinderGeometry(.78, .92, .34, 12), new THREE.MeshStandardMaterial({ color: '#596b43', metalness: .3, roughness: .56, emissive: '#27341c' }));
+    depot.position.set(0, .25, 0); depot.castShadow = true; depot.receiveShadow = true; this.scene.add(depot);
+    const depotLabel = new THREE.Mesh(new THREE.BoxGeometry(1.2, .13, .13), new THREE.MeshBasicMaterial({ color: '#d1e58f' }));
+    depotLabel.position.set(0, .75, 0); this.scene.add(depotLabel);
 
-    for (const [index, site] of [
-      { id: 'east-cache', x: 3.3, z: 1.7, resource: 'credits' }, { id: 'north-cache', x: -2.5, z: -1.7, resource: 'credits' },
-      { id: 'west-pile', x: -3.6, z: 1.4, resource: 'scrap' }, { id: 'south-pile', x: 2.5, z: -1.8, resource: 'scrap' },
-    ].entries()) {
-      const color = site.resource === 'credits' ? '#e5bd65' : '#9c8870';
-      const group = new THREE.Group(); group.position.set(site.x, .12, site.z);
-      for (let piece = 0; piece < 4; piece++) {
-        const mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(.17 + (piece % 2) * .04, 0), new THREE.MeshStandardMaterial({ color, metalness: .55, roughness: .4 }));
-        mesh.position.set((piece % 2) * .28 - .12, .12 + Math.floor(piece / 2) * .22, (piece % 3) * .14 - .12); mesh.castShadow = true; group.add(mesh);
-      }
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(.48, .025, 6, 24), new THREE.MeshBasicMaterial({ color: site.resource === 'credits' ? '#e5bd65' : '#a18d72', transparent: true, opacity: .55 }));
-      ring.rotation.x = Math.PI / 2; ring.position.y = .02; group.add(ring);
-      const stockLabel = new THREE.Mesh(new THREE.BoxGeometry(.52, .07, .08), new THREE.MeshBasicMaterial({ color: '#d5dfa8' }));
-      stockLabel.position.set(0, .94, 0); group.add(stockLabel);
-      group.userData = { pieces: group.children.filter(child => child !== ring && child !== stockLabel), ring, stockLabel, resource: site.resource };
-      this.scene.add(group); this.salvageMeshes.set(site.id, group);
+    for (const site of salvageSitesForSeed()) this.addSalvageMesh(site);
+  }
+
+  addSalvageMesh(site) {
+    const color = salvageColor(site.resource);
+    const group = new THREE.Group(); group.position.set(site.x, .12, site.z);
+    for (let piece = 0; piece < 4; piece++) {
+      const mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(.17 + (piece % 2) * .04, 0), new THREE.MeshStandardMaterial({ color, metalness: .55, roughness: .4 }));
+      mesh.position.set((piece % 2) * .28 - .12, .12 + Math.floor(piece / 2) * .22, (piece % 3) * .14 - .12); mesh.castShadow = true; group.add(mesh);
     }
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(.48, .025, 6, 24), new THREE.MeshBasicMaterial({ color: salvageColor(site.resource), transparent: true, opacity: .55 }));
+    ring.rotation.x = Math.PI / 2; ring.position.y = .02; group.add(ring);
+    const stockLabel = new THREE.Mesh(new THREE.BoxGeometry(.52, .07, .08), new THREE.MeshBasicMaterial({ color: '#d5dfa8' }));
+    stockLabel.position.set(0, .94, 0); group.add(stockLabel);
+    group.userData = { pieces: group.children.filter(child => child !== ring && child !== stockLabel), ring, stockLabel, resource: site.resource };
+    this.scene.add(group); this.salvageMeshes.set(site.id, group);
+  }
+
+  setTechnology(sceneUnlocks = []) {
+    this.technologyUnlocks = new Set(sceneUnlocks);
+    if (!this.available) {
+      if (this.lastSnapshot) this.drawFallback(this.lastSnapshot);
+      return;
+    }
+    for (const [id, mesh] of this.technologyMeshes) mesh.visible = this.technologyUnlocks.has(id);
+    const addStructure = (id, build) => {
+      if (this.technologyMeshes.has(id)) return;
+      const group = build();
+      this.scene.add(group); this.technologyMeshes.set(id, group);
+      group.visible = this.technologyUnlocks.has(id);
+    };
+    addStructure('survey_beacon', () => {
+      const group = new THREE.Group(); group.position.set(-3.1, 0, 1.9);
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(.07, .11, 1.65, 8), new THREE.MeshStandardMaterial({ color: '#a9c875', emissive: '#3f6324', emissiveIntensity: 1.1 }));
+      mast.position.y = .9; mast.castShadow = true; group.add(mast);
+      const dish = new THREE.Mesh(new THREE.TorusGeometry(.32, .045, 8, 24), new THREE.MeshStandardMaterial({ color: '#c8d99a', metalness: .6 }));
+      dish.position.y = 1.5; group.add(dish);
+      const lamp = new THREE.PointLight('#a9e77b', 4, 4); lamp.position.y = 1.7; group.add(lamp);
+      return group;
+    });
+    addStructure('refinery', () => {
+      const group = new THREE.Group(); group.position.set(3.2, 0, -1.9);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, .85, .9), new THREE.MeshStandardMaterial({ color: '#77765a', metalness: .4, roughness: .65 }));
+      body.position.y = .55; body.castShadow = true; body.receiveShadow = true; group.add(body);
+      const chimney = new THREE.Mesh(new THREE.CylinderGeometry(.12, .17, 1.05, 8), new THREE.MeshStandardMaterial({ color: '#c08e4c', metalness: .45 }));
+      chimney.position.set(.32, 1.35, -.1); group.add(chimney);
+      const glow = new THREE.Mesh(new THREE.BoxGeometry(.42, .12, .08), new THREE.MeshBasicMaterial({ color: '#e6bd65' }));
+      glow.position.set(0, .58, .47); group.add(glow);
+      return group;
+    });
   }
 
   addCrane(x, z) {
@@ -141,6 +183,10 @@ export class FactoryScene {
     this.bots.forEach((bot, i) => { bot.visible = i < count; });
   }
   setSimulation(snapshot) {
+    const sites = snapshot.nodes || [];
+    const siteDescription = sites.map(node => `${node.resource} site at x ${node.x}, z ${node.z}`).join('; ');
+    const fieldLabel = `Salvage field with ${sites.length} sites${siteDescription ? `: ${siteDescription}` : ''}.`;
+    if (this.host.getAttribute('aria-label') !== fieldLabel) this.host.setAttribute('aria-label', fieldLabel);
     if (!this.available) { this.drawFallback(snapshot); return; }
     this.setRobots(snapshot.robots.length);
     snapshot.robots.forEach(robot => {
@@ -149,7 +195,7 @@ export class FactoryScene {
        bot.userData.workPhase = robot.phase;
        bot.userData.tool?.rotation.set(robot.phase === 'collect' ? .75 : robot.phase === 'scan' ? .35 : 0, 0, 0);
       if (robot.phase === 'travel' || robot.phase === 'return') {
-        const target = robot.phase === 'return' ? { x: 0, z: 1.5 } : snapshot.nodes.find(node => node.id === robot.targetId);
+        const target = robot.phase === 'return' ? { x: 0, z: 0 } : snapshot.nodes.find(node => node.id === robot.targetId);
         if (target) { bot.userData.targetRotation = Math.atan2(target.x - robot.x, target.z - robot.z); bot.userData.moving = true; }
       } else bot.userData.moving = false;
       bot.userData.phase = robot.id * 1.7 + (robot.phase === 'collect' ? 1 : 0);
@@ -157,11 +203,16 @@ export class FactoryScene {
     const followed = this.followId === null ? null : snapshot.robots.find(robot => robot.id === this.followId);
     this.cameraGoal.set(followed?.x ?? 0, followed ? .6 : .6, followed?.z ?? 0);
     snapshot.nodes.forEach(node => {
-      const mesh = this.salvageMeshes.get(node.id); if (!mesh) return;
+      let mesh = this.salvageMeshes.get(node.id);
+      if (!mesh) { this.addSalvageMesh(node); mesh = this.salvageMeshes.get(node.id); }
+      mesh.position.set(node.x, .12, node.z);
+      mesh.userData.resource = node.resource;
+      mesh.userData.ring.material.color.set(salvageColor(node.resource));
+      mesh.userData.pieces.forEach(piece => piece.material.color.set(salvageColor(node.resource)));
       mesh.visible = node.remaining > 0;
       mesh.scale.setScalar(node.stock ? .72 + .28 * node.remaining / node.stock : 1);
       mesh.userData.pieces.forEach((piece, index) => { piece.visible = index < Math.ceil(node.remaining / Math.max(1, node.stock) * mesh.userData.pieces.length); });
-      mesh.userData.ring.material.color.set(node.scanned ? '#c9e68a' : node.resource === 'credits' ? '#e5bd65' : '#a18d72');
+      mesh.userData.ring.material.color.set(node.scanned ? '#c9e68a' : salvageColor(node.resource));
       mesh.userData.ring.material.opacity = node.scanned ? .95 : .55;
       mesh.userData.stockLabel.material.color.set(node.remaining > 0 ? (node.scanned ? '#c9e68a' : '#d5dfa8') : '#665e4d');
     });
@@ -170,7 +221,7 @@ export class FactoryScene {
       this.lastDeliveryId = delivery.id;
       if (this.deliveryPulse) this.scene.remove(this.deliveryPulse);
       this.deliveryPulse = new THREE.Mesh(new THREE.TorusGeometry(.45, .045, 8, 32), new THREE.MeshBasicMaterial({ color: '#c9e68a', transparent: true, opacity: .95 }));
-      this.deliveryPulse.rotation.x = Math.PI / 2; this.deliveryPulse.position.set(0, .16, 1.5); this.deliveryPulse.userData.startedAt = this.clock.getElapsedTime(); this.scene.add(this.deliveryPulse);
+      this.deliveryPulse.rotation.x = Math.PI / 2; this.deliveryPulse.position.set(0, .16, 0); this.deliveryPulse.userData.startedAt = this.clock.getElapsedTime(); this.scene.add(this.deliveryPulse);
     }
   }
   resize() {
@@ -194,22 +245,24 @@ export class FactoryScene {
     const ctx = this.fallbackContext;
     const width = this.host.clientWidth, height = this.host.clientHeight;
     if (!width || !height) return;
-    const scale = Math.min(width / 11, height / 8);
+    const scale = Math.min(width / 34, height / 22);
     const px = x => width / 2 + x * scale;
     const py = z => height / 2 + z * scale;
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#1b1e17'; ctx.fillRect(0, 0, width, height);
     ctx.strokeStyle = '#30352a'; ctx.lineWidth = 1;
-    for (let x = -5; x <= 5; x++) { ctx.beginPath(); ctx.moveTo(px(x), py(-3.5)); ctx.lineTo(px(x), py(3.5)); ctx.stroke(); }
-    for (let z = -3; z <= 3; z++) { ctx.beginPath(); ctx.moveTo(px(-5), py(z)); ctx.lineTo(px(5), py(z)); ctx.stroke(); }
-    ctx.fillStyle = '#454a3a'; ctx.fillRect(px(-2.8), py(1.8), 5.6 * scale, 2.7 * scale);
-    ctx.fillStyle = '#c4df86'; ctx.beginPath(); ctx.arc(px(0), py(1.5), .35 * scale, 0, Math.PI * 2); ctx.fill();
+    for (let x = -16; x <= 16; x += 2) { ctx.beginPath(); ctx.moveTo(px(x), py(-10)); ctx.lineTo(px(x), py(10)); ctx.stroke(); }
+    for (let z = -10; z <= 10; z += 2) { ctx.beginPath(); ctx.moveTo(px(-16), py(z)); ctx.lineTo(px(16), py(z)); ctx.stroke(); }
+    ctx.fillStyle = '#454a3a'; ctx.fillRect(px(-5), py(-3), 10 * scale, 6 * scale);
+    ctx.fillStyle = '#c4df86'; ctx.beginPath(); ctx.arc(px(0), py(0), .65 * scale, 0, Math.PI * 2); ctx.fill();
+    if (this.technologyUnlocks.has('survey_beacon')) { ctx.fillStyle = '#a9e77b'; ctx.fillRect(px(-3.25), py(1.65), .3 * scale, .6 * scale); }
+    if (this.technologyUnlocks.has('refinery')) { ctx.fillStyle = '#c08e4c'; ctx.fillRect(px(2.7), py(-2.35), .9 * scale, .65 * scale); }
     for (const node of snapshot.nodes || []) {
       if (node.remaining <= 0) continue;
-      ctx.fillStyle = node.resource === 'credits' ? '#e5bd65' : '#a18d72';
+      ctx.fillStyle = salvageColor(node.resource);
       ctx.beginPath(); ctx.arc(px(node.x), py(node.z), (.22 + .035 * Math.min(node.remaining, 5)) * scale, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#d9dccd'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
-      ctx.fillText(node.resource === 'credits' ? '¢' : '▧', px(node.x), py(node.z) + 3);
+      ctx.fillText(node.resource === 'credits' ? '¢' : node.resource === 'alloy' ? '⬡' : '▧', px(node.x), py(node.z) + 3);
     }
     for (const robot of snapshot.robots || []) {
       ctx.save(); ctx.translate(px(robot.x), py(robot.z));
@@ -282,5 +335,5 @@ export class FactoryScene {
     canvas.setPointerCapture?.(event.pointerId);
   }
   followRobot(id) { this.followId = id === '' || id === null ? null : Number(id); }
-  resetCamera() { this.cameraYaw = .53; this.cameraPitch = .48; this.cameraDistance = 16; this.followRobot(null); this.cameraGoal.set(0, .6, 0); }
+  resetCamera() { this.cameraYaw = .53; this.cameraPitch = .48; this.cameraDistance = 27; this.followRobot(null); this.cameraGoal.set(0, .6, 0); }
 }

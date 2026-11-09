@@ -2,7 +2,7 @@
 
 Scrapbound is a browser-based robot automation game. Build a factory, program or pilot individual robots, earn resources from visible deliveries, and send your machines on increasingly difficult salvage runs.
 
-The factory save is still browser-local. Laravel powers callsign accounts and a shared community board; a trusted economy and automatic item settlement are still planned.
+Guest factory saves remain browser-local. Signed-in pilots also have server-owned wallets, mission progress, salvage inventory, and escrow trades. Community trade posts remain coordination-only; actual item-for-credit transfers use the escrow trade panel.
 
 ## Run locally
 
@@ -30,7 +30,7 @@ On Windows, run `build.bat` to install Composer/npm dependencies, build assets i
 - Salvage missions and Core Shard prestige
 - Blockly brain workshop with navigation, conditionals, return-to-base actions, browser-local programs, and per-bot keyboard/mouse control profiles
 - A visible salvage loop: assign a program to the whole crew or a specific robot; robots patrol, scan, collect a chosen resource, and return cargo. Assignments persist locally; there is no idle/offline payout.
-- Laravel sign-in and a community board for help, trade offers, replies, and collaboration
+- Laravel sign-in, server-authoritative wallets/inventory, escrow item-for-credit trades, and a community board for help, negotiation posts, replies, and collaboration
 
 ## Enable accounts and community
 
@@ -38,6 +38,6 @@ On Windows, run `build.bat` to install Composer/npm dependencies, build assets i
 2. Run `php artisan migrate` to create the account/community tables.
 3. Ensure PHP-FPM can read the project and Nginx uses `nginx.location.conf`. `APP_DEBUG` must be false outside local development; never commit `.env`.
 
-Community trade posts are negotiation offers only; players cannot transfer game currencies/items yet. Replies are public to anyone who can access the board. Use unique passwords and do not post personal contact information.
+Community trade posts are negotiation offers only. Targeted item trades reserve catalog-tradable inventory, then atomically exchange items and credits when the named recipient accepts. The server checks each offer's expiry timestamp when trade offers are viewed or acted on, so no background scheduler is needed for escrow release. Replies are public to anyone who can access the board. Use unique passwords and do not post personal contact information.
 
-See the [game plan](docs/GAMEPLAN.md), [development queue](docs/DEVELOPMENT_QUEUE.md), [working backlog](docs/BACKLOG.md), and [installed libraries](docs/SUGGESTED_LIBRARIES.md), including the [trade-off evaluation](docs/SUGGESTED_LIBRARIES_EVALUATION.md) and separate package notes.
+See the [game plan](docs/GAMEPLAN.md), the proposed [expansion plan](docs/EXPANSION_PLAN.md), [development queue](docs/DEVELOPMENT_QUEUE.md), [working backlog](docs/BACKLOG.md), and [installed libraries](docs/SUGGESTED_LIBRARIES.md), including the [trade-off evaluation](docs/SUGGESTED_LIBRARIES_EVALUATION.md) and separate package notes.

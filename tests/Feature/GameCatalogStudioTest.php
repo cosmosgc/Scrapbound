@@ -73,4 +73,27 @@ class GameCatalogStudioTest extends TestCase
         $this->assertSame(6, GameCatalogAudit::count());
         $this->assertSame(77, GameCatalogVersion::findOrFail($first->id)->content['items'][0]['cost']);
     }
+
+    public function test_catalog_studio_can_preview_and_draft_resource_zone_and_technology_effect_edits(): void
+    {
+        $admin = $this->user('CatalogTechEditor', 'admin');
+        $content = app(GameCatalog::class)->validate(config('scrapbound'));
+        $content['resources'][2]['maxStock'] = 9;
+        $content['resources'][2]['zone'] = 'deep_quarry';
+        $content['technologyNodes'][0]['effects']['unlockZones'] = ['deep_quarry'];
+        $content['technologyNodes'][1]['effects']['stockMultipliers']['alloy'] = 2;
+        $content['technologyNodes'][1]['effects']['respawnTimeMultipliers']['alloy'] = .75;
+
+        $this->actingAs($admin)->postJson('/api.php?action=catalog_preview', ['content' => $content])
+            ->assertOk()
+            ->assertJsonPath('preview.resources.2.maxStock', 9)
+            ->assertJsonPath('preview.resources.2.zone', 'deep_quarry')
+            ->assertJsonPath('preview.technologyNodes.0.effects.unlockZones.0', 'deep_quarry')
+            ->assertJsonPath('preview.technologyNodes.1.effects.stockMultipliers.alloy', 2)
+            ->assertJsonPath('preview.technologyNodes.1.effects.respawnTimeMultipliers.alloy', .75);
+        $draft = $this->postJson('/api.php?action=catalog_draft', ['content' => $content])
+            ->assertCreated()->assertJsonPath('status', 'draft');
+        $this->assertSame('draft', $draft->json('status'));
+        $this->assertSame(9, GameCatalogVersion::query()->findOrFail($draft->json('id'))->content['resources'][2]['maxStock']);
+    }
 }

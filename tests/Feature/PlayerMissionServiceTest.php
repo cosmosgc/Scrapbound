@@ -97,6 +97,8 @@ class PlayerMissionServiceTest extends TestCase
         $this->assertTrue($replay['replayed']);
         $this->assertSame($result['wallet'], $replay['wallet']);
         $this->assertSame(4, $user->wallet()->firstOrFail()->ledgerEntries()->count());
+        $this->assertSame(1, $result['inventory']['items'][0]['quantity']);
+        $this->assertDatabaseHas('player_inventory_receipts', ['user_id' => $user->id, 'item_id' => 'alloy', 'action' => 'grant', 'reason' => 'mission_salvage']);
     }
 
     public function test_failed_seeded_mission_pays_nothing_and_does_not_advance_progress(): void

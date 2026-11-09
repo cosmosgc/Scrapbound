@@ -171,15 +171,21 @@ Phase 1  Engine skeleton             [██████████████
         items = response.json["items"]
         by_id = {item["id"]: item for item in items}
         self.assertIn("SB-016", by_id)
-        self.assertEqual(by_id["SB-016"]["status"], "in_progress")
+        self.assertEqual(by_id["SB-016"]["status"], "done")
         self.assertEqual(by_id["SB-015"]["status"], "done")
-        self.assertEqual(by_id["SB-016"]["dependency_ids"], ["SB-020", "SB-011", "SB-012"])
+        self.assertEqual(by_id["SB-016"]["dependency_ids"], ["SB-020", "SB-011", "SB-012", "SB-015"])
+        self.assertEqual(by_id["SB-051"]["status"], "done")
+        self.assertEqual(by_id["SB-052"]["status"], "done")
 
         queue = client.get("/queue")
         self.assertEqual(queue.status_code, 200)
         self.assertIn(b"docs/DEVELOPMENT_QUEUE.md", client.get("/").data)
         self.assertIn(b"#10", queue.data)
         self.assertIn(b"SB-015", queue.data)
+
+        backlog = client.get("/")
+        self.assertIn(b"SB-051", backlog.data)
+        self.assertIn(b"SB-052", backlog.data)
 
     def test_orders_prerequisites_before_dependents(self):
         items = load_backlog(self.todo)

@@ -31,14 +31,14 @@ class RobotProgramValidator
             if (array_diff(array_keys($step), $allowed)) {
                 throw new InvalidArgumentException('Instruction contains unsupported fields.');
             }
-            if (in_array($action, ['collect', 'if_site'], true) && ! in_array($step['resource'] ?? 'credits', ['credits', 'scrap'], true)) {
-                throw new InvalidArgumentException('Resource must be credits or scrap.');
+            if (in_array($action, ['collect', 'if_site'], true) && ! in_array($step['resource'] ?? 'credits', ['credits', 'scrap', 'alloy'], true)) {
+                throw new InvalidArgumentException('Resource must be a supported salvage type.');
             }
             if ($action === 'wait' && (! is_numeric($step['seconds'] ?? null) || $step['seconds'] < 1 || $step['seconds'] > 30)) {
                 throw new InvalidArgumentException('Wait duration must be between 1 and 30 seconds.');
             }
-            if ($action === 'move_to' && (! is_numeric($step['x'] ?? null) || ! is_numeric($step['z'] ?? null) || $step['x'] < -5 || $step['x'] > 5 || $step['z'] < -3 || $step['z'] > 3)) {
-                throw new InvalidArgumentException('Movement destination is outside workshop bounds.');
+            if ($action === 'move_to' && (! is_numeric($step['x'] ?? null) || ! is_numeric($step['z'] ?? null) || $step['x'] < -16 || $step['x'] > 16 || $step['z'] < -10 || $step['z'] > 10)) {
+                throw new InvalidArgumentException('Movement destination is outside salvage field bounds.');
             }
             if (in_array($action, ['if_cargo', 'if_site'], true)) {
                 $skip = $step['skip'] ?? null;

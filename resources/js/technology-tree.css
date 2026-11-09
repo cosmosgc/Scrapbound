@@ -1,0 +1,9 @@
+.technology-tree{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.technology-node{display:grid;gap:10px;padding:15px;border:1px solid #34372b;border-radius:9px;background:linear-gradient(145deg,#20231b,#191b16)}
+.technology-node.technology-owned{border-color:#77894f;background:linear-gradient(145deg,#29311f,#1c2118)}
+.technology-node h3{margin:0;color:#e9ebdf;font-size:15px}
+.technology-node p{margin:0;color:#a5a995;font-size:12px;line-height:1.5}
+.technology-node-meta{display:flex;flex-wrap:wrap;gap:7px;color:#929783;font:10px var(--mono);text-transform:uppercase}
+.technology-node-meta span{padding:4px 6px;border:1px solid #383b30;border-radius:4px}
+.technology-node .button{justify-self:start}
+@media(max-width:780px){.technology-tree{grid-template-columns:1fr}}

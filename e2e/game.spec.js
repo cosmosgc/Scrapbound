@@ -119,7 +119,7 @@ test('fullscreen workshop exposes quick-purchase buttons outside the canvas', as
 });
 
 test('signed-in player loads server jobs and persists programs and robot purchases', async ({ page, baseURL, browser }) => {
-  test.setTimeout(60000);
+  test.setTimeout(120000);
   await page.goto(new URL('factory', baseURL).toString());
   await page.locator('#auth-button').click();
   await page.locator('#auth-mode').click();
@@ -132,6 +132,9 @@ test('signed-in player loads server jobs and persists programs and robot purchas
   await expect(page.locator('#credits')).toHaveText('120');
   await expect(page.locator('#credits-server')).toBeVisible();
   await expect(page.locator('#credits-server')).toContainText('SERVER');
+  await expect(page.locator('#inventory-items')).toContainText('No catalog items yet');
+  await expect(page.locator('#trade-list')).toContainText('No item trade offers yet');
+  await expect(page.locator('#trade-create')).toBeDisabled();
   await expect(page.locator('#delivery-feed')).not.toContainText('+20 credits');
   await page.reload();
   await expect(page.locator('#auth-button')).toContainText(username);
@@ -151,6 +154,10 @@ test('signed-in player loads server jobs and persists programs and robot purchas
   await expect(page.locator('#brain-deploy-target option')).toHaveCount(3);
   await expect(page.locator('#server-template-list')).toContainText('Salvage scout');
   await page.locator('a[data-route="/expeditions"]').click();
+  await page.locator('#cooperative-goal').selectOption('2');
+  await page.locator('#cooperative-create').click();
+  await expect(page.locator('#cooperative-jobs')).toContainText(`${username} · Sector 01`);
+  await expect(page.locator('#cooperative-jobs')).toContainText('0/2 contributions');
   await page.locator('[data-server-mission="1"]').click();
   await expect(page.locator('[data-mission-claim]')).toContainText('In progress');
 
@@ -173,6 +180,9 @@ test('signed-in player loads server jobs and persists programs and robot purchas
   await defenderPage.locator('#auth-submit').click();
   await expect(defenderPage.locator('#auth-button')).toContainText(defenderName);
   await defenderPage.locator('a[data-route="/expeditions"]').click();
+  const cooperativeCard = defenderPage.locator('#cooperative-jobs .battle-entry').filter({ hasText: `${username} · Sector 01` });
+  await cooperativeCard.getByRole('button', { name: 'Join' }).click();
+  await expect(cooperativeCard.getByRole('button', { name: 'Contribute' })).toBeVisible();
   await defenderPage.locator('#battle-publish').click();
   await expect(defenderPage.locator('#battle-status')).toContainText('immutable defense snapshot');
 
@@ -188,5 +198,92 @@ test('signed-in player loads server jobs and persists programs and robot purchas
   await expect(page.locator('#battle-history [data-replay-seek]')).toBeVisible();
   await page.locator('#battle-history [data-replay-speed]').selectOption('2');
   await expect(page.locator('#battle-history [data-replay-label]').first()).not.toContainText('Ready to replay');
+
+  await page.locator('a[data-route="/expeditions"]').click();
+  const claimButton = page.locator('[data-mission-claim]');
+  await expect(claimButton).toBeEnabled({ timeout: 30000 });
+  await claimButton.click();
+  await expect(page.locator('#mission-result')).toContainText(/Salvage secured|returned safely/);
+  if (!(await page.locator('#mission-result').innerText()).includes('Salvage secured')) {
+    await page.locator('[data-server-mission="1"]').click();
+    await expect(page.locator('[data-mission-claim]')).toBeEnabled({ timeout: 30000 });
+    await page.locator('[data-mission-claim]').click();
+    await expect(page.locator('#mission-result')).toContainText('Salvage secured');
+  }
+  await expect(page.locator('#inventory-items')).toContainText('Salvage alloy');
+  await page.goto(new URL('factory', baseURL).toString());
+  await page.locator('#trade-recipient').selectOption({ label: defenderName });
+  await page.locator('#trade-item').selectOption('alloy');
+  await page.locator('#trade-quantity').fill('1');
+  await page.locator('#trade-price').fill('25');
+  const createTradeResponse = page.waitForResponse(response => response.url().includes('item_trade_create'));
+  await page.locator('#trade-create').click();
+  expect((await createTradeResponse).status()).toBe(201);
+  await expect(page.locator('#trade-list')).toContainText('open');
+
+  await defenderPage.locator('.nav-link[data-route="/factory"]').click();
+  await defenderPage.locator('#inventory-refresh').click();
+  const incomingOffer = defenderPage.locator('#trade-list .battle-entry').filter({ hasText: username });
+  await expect(incomingOffer).toContainText('Salvage alloy');
+  const acceptTradeResponse = defenderPage.waitForResponse(response => response.url().includes('item_trade_accept'));
+  await incomingOffer.locator('[data-trade-accept]').click();
+  expect((await acceptTradeResponse).status()).toBe(200);
+  await expect(defenderPage.locator('#trade-list')).toContainText('accepted');
+  await expect(defenderPage.locator('#inventory-items')).toContainText('1 owned');
+
   await defenderContext.close();
+});
+
+test('signed-in player can research geological survey and see the technology unlock', async ({ page, baseURL }) => {
+  test.setTimeout(90000);
+  await page.goto(new URL('factory', baseURL).toString());
+  await page.locator('#auth-button').click();
+  await page.locator('#auth-mode').click();
+  const username = `TechTest${Date.now().toString().slice(-8)}`;
+  await page.locator('#auth-username').fill(username);
+  await page.locator('#auth-password').fill('TechTest-Only-2026!');
+  const idleSettlement = page.waitForResponse(response => response.url().includes('idle_settle'));
+  await page.locator('#auth-submit').click();
+  await expect(page.locator('#auth-button')).toContainText(username);
+  const settlement = await (await idleSettlement).json();
+  expect(settlement.snapshot.nodes).toHaveLength(8);
+  const firstSite = settlement.snapshot.nodes[0];
+  await expect(page.locator('#factory-scene')).toHaveAttribute(
+    'aria-label',
+    new RegExp(`${firstSite.resource} site at x ${firstSite.x}, z ${firstSite.z}`),
+  );
+  await expect(page.locator('#technology-tree')).toContainText('Geological survey');
+  await expect(page.locator('#technology-tree')).toContainText('AVAILABLE RESEARCH');
+  await page.locator('#technology-tree [data-tech-purchase="prospecting"]').click();
+  await expect(page.locator('#technology-tree')).toContainText('RESEARCH COMPLETE');
+  await expect(page.locator('#technology-tree')).toContainText('Unlocks alloy');
+  await expect(page.locator('#technology-tree')).toContainText('Opens quarry zone');
+  await expect(page.locator('#credits-server')).toHaveText('SERVER ¢30');
+  await page.locator('#technology-tree [data-tech-purchase="refinery"]').click();
+  await expect(page.locator('#technology-tree')).toContainText('alloy stock ×1.5');
+  await expect(page.locator('#technology-tree')).toContainText('alloy restock time ×0.5');
+  await expect(page.locator('#scrap-server')).toHaveText('SERVER ▧6');
+});
+
+test('signed-in factory renders server offline settlement summary and wallet balance', async ({ page, baseURL }) => {
+  await page.route('**/api.php?action=idle_settle*', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      ok: true, world_seed: 42, elapsed_seconds: 120, credited_seconds: 120, capped: false, ticks: 1200,
+      payouts: [{ resource: 'credits', amount: 50, deliveries: 2 }],
+      snapshot: { robots: [], nodes: [] }, wallet: { credits: 170, scrap: 18 }, settled_at: new Date().toISOString(),
+    }),
+  }));
+  await page.goto(new URL('factory', baseURL).toString());
+  await page.locator('#auth-button').click();
+  await page.locator('#auth-mode').click();
+  const username = `OfflineTest${Date.now().toString().slice(-8)}`;
+  await page.locator('#auth-username').fill(username);
+  await page.locator('#auth-password').fill('OfflineTest-Only-2026!');
+  await page.locator('#auth-submit').click();
+  await expect(page.locator('#auth-button')).toContainText(username);
+  await expect(page.locator('#delivery-feed')).toContainText('Offline bots worked 2m · 2 depot deliveries');
+  await expect(page.locator('#delivery-feed')).toContainText('2 depot runs');
+  await expect(page.locator('#credits-server')).toHaveText('SERVER ¢170');
 });
