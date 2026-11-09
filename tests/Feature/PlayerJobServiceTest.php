@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\BrainTemplate;
+use App\Models\PlayerTechnologyUnlock;
 use App\Models\User;
 use App\Services\CurrencyLedger;
 use App\Services\PlayerJobService;
@@ -47,6 +48,26 @@ class PlayerJobServiceTest extends TestCase
 
         $this->expectException(DomainException::class);
         app(PlayerJobService::class)->purchaseRobot($user, 'scavenger', 'jobs:purchase-001');
+    }
+
+    public function test_technology_gates_new_robot_kinds_on_the_server(): void
+    {
+        $user = $this->player();
+        $jobs = app(PlayerJobService::class);
+        try {
+            $jobs->purchaseRobot($user, 'sky_miner', 'jobs:sky-locked-001');
+            $this->fail('An unresearchable robot kind must not be purchasable.');
+        } catch (DomainException $exception) {
+            $this->assertStringContainsString('Research the required technology', $exception->getMessage());
+        }
+
+        PlayerTechnologyUnlock::create([
+            'user_id' => $user->id, 'node_id' => 'aerial_mining', 'catalog_version' => 1,
+            'effects' => ['unlockBotKinds' => ['sky_miner']], 'purchased_at' => now(),
+        ]);
+        app(CurrencyLedger::class)->grant($user, 'credits', 1000, 'jobs:sky-credit-grant', 'test_grant');
+        $purchased = $jobs->purchaseRobot($user, 'sky_miner', 'jobs:sky-unlocked-001');
+        $this->assertSame('sky_miner', $purchased['robots'][1]['kind']);
     }
 
     public function test_program_assignments_and_template_unlocks_are_persisted_and_compatible(): void

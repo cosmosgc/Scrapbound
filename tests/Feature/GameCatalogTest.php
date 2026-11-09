@@ -19,8 +19,27 @@ class GameCatalogTest extends TestCase
             ->assertJsonPath('catalog.version', 1)
             ->assertJsonPath('catalog.items.0.id', 'scavenger')
             ->assertJsonPath('catalog.items.0.priceGrowth', 1.17)
+            ->assertJsonPath('catalog.items.3.id', 'sky_miner')
+            ->assertJsonPath('catalog.technologyNodes.4.effects.unlockBotKinds.0', 'block_miner')
             ->assertJsonPath('catalog.rewards.creditsPerCargo', 5)
             ->assertJsonPath('catalog.featureFlags.tradesEnabled', false);
+    }
+
+    public function test_honeycomb_grid_positions_are_bounded_and_unique(): void
+    {
+        $content = config('scrapbound');
+        $content['technologyNodes'][0]['gridPosition'] = ['q' => 0, 'r' => 0];
+        $content['technologyNodes'][1]['gridPosition'] = ['q' => 1, 'r' => 0];
+        $validated = app(GameCatalog::class)->validate($content);
+        $this->assertSame(['q' => 0, 'r' => 0], $validated['technologyNodes'][0]['gridPosition']);
+
+        $content['technologyNodes'][1]['gridPosition'] = ['q' => 0, 'r' => 0];
+        try {
+            app(GameCatalog::class)->validate($content);
+            $this->fail('Expected duplicate honeycomb positions to be rejected.');
+        } catch (DomainException $exception) {
+            $this->assertStringContainsString('cannot share', $exception->getMessage());
+        }
     }
 
     public function test_active_database_catalog_supersedes_the_fallback_version(): void
@@ -56,7 +75,11 @@ class GameCatalogTest extends TestCase
         $catalog = config('scrapbound');
         unset($catalog['resources'][0]['respawnSeconds']);
         $validated = app(GameCatalog::class)->validate($catalog);
-        $this->assertSame(5, $validated['resources'][0]['respawnSeconds']);
+        $this->assertSame(60, $validated['resources'][0]['respawnSeconds']);
+
+        $catalog = config('scrapbound');
+        $catalog['resources'][0]['respawnSeconds'] = 5;
+        $this->assertSame(60, app(GameCatalog::class)->validate($catalog)['resources'][0]['respawnSeconds']);
 
         $catalog['technologyNodes'][0]['effects']['respawnTimeMultipliers'] = ['alloy' => 0];
         $this->expectException(DomainException::class);

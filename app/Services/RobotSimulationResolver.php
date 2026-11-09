@@ -18,18 +18,22 @@ class RobotSimulationResolver
         $rewards ??= config('scrapbound.rewards');
         $resources ??= config('scrapbound.resources', []);
         $nodes = $this->seedSites($seed, $resources, $technologyEffects);
+        $drops = [];
         $programs = $assignments['units'] ?? [];
         $crewProgram = $assignments['crew'] ?? [];
         $robots = [];
         $id = 0;
-        foreach (['scavenger', 'scrap_hound', 'fabricator'] as $kind) {
+        foreach (array_keys($crew) as $kind) {
             for ($owned = 0; $owned < ($crew[$kind] ?? 0) && $id < 20; $owned++, $id++) {
+                $program = $programs[$id] ?? $crewProgram;
                 $robots[] = [
                     'id' => $id, 'kind' => $kind, 'x' => ($id % 3 - 1) * .85,
                     'z' => 1.1 + floor($id / 3) * .8,
-                    'program' => $programs[$id] ?? $crewProgram, 'command' => 0,
+                    'program' => $program, 'command' => 0,
                     'phase' => 'idle', 'target' => null, 'destination' => null,
+                    'target_drop' => null,
                     'cargo' => 0, 'cargo_type' => 'credits', 'work' => 0.0, 'wait' => 0.0,
+                    'automation' => ! $program || $program === [['action' => 'patrol'], ['action' => 'scan'], ['action' => 'collect', 'resource' => 'credits']],
                     'navigation_goal' => null, 'best_distance' => null, 'stalled_ticks' => 0,
                 ];
             }
@@ -48,7 +52,7 @@ class RobotSimulationResolver
             }
             unset($node);
             foreach ($robots as &$robot) {
-                $this->stepRobot($robot, $nodes, .1, $upgrades, $rewards, $resources, $technologyEffects, $robots, $payouts);
+                $this->stepRobot($robot, $nodes, $drops, .1, $upgrades, $rewards, $resources, $technologyEffects, $robots, $payouts);
             }
             unset($robot);
         }
@@ -58,21 +62,18 @@ class RobotSimulationResolver
             'phase' => $robot['phase'], 'cargo' => $robot['cargo'], 'status' => $robot['status'] ?? 'Ready',
         ], $robots), 'nodes' => array_map(fn (array $node) => [
             'id' => $node['id'], 'resource' => $node['resource'], 'remaining' => $node['remaining'], 'stock' => $node['stock'],
-            'x' => $node['x'], 'z' => $node['z'], 'respawnSeconds' => $node['respawn_duration'],
-        ], $nodes)];
+            'x' => $node['x'], 'z' => $node['z'], 'respawnSeconds' => $node['respawn_duration'], 'respawnRemaining' => max(0, $node['respawn']),
+        ], $nodes), 'drops' => array_values($drops)];
     }
 
     private function seedSites(int $seed, array $resources, array $technologyEffects): array
     {
         $state = $seed;
         $slots = [];
-        for ($z = -9; $z <= 9; $z++) {
-            for ($x = -15; $x <= 15; $x++) {
-                // Keep all resource sites outside the central depot/platform area.
-                if (abs($x) <= 6 && abs($z) <= 4) {
-                    continue;
-                }
-                if ($this->blockedByObstacle($x, $z, self::NAVIGATION_OBSTACLES, .3)) {
+        for ($z = -9; $z <= 9; $z += 2) {
+            for ($x = -15; $x <= 15; $x += 2) {
+                // Solid voxel blocks fill the field; the central depot remains clear.
+                if (abs($x) <= 5 && abs($z) <= 3) {
                     continue;
                 }
                 $slots[] = ['x' => $x, 'z' => $z];
@@ -90,7 +91,7 @@ class RobotSimulationResolver
             && (! isset($resource['zone']) || in_array($resource['zone'], $unlockedZones, true))
         ));
         $sites = [];
-        foreach (array_slice($slots, 0, 8) as $index => $slot) {
+        foreach ($slots as $index => $slot) {
             $totalWeight = 0.0;
             foreach ($eligibleResources as $definition) {
                 $totalWeight += (float) $definition['spawnWeight'] * (float) ($technologyEffects['spawnWeightMultipliers'][$definition['id']] ?? 1);
@@ -108,7 +109,7 @@ class RobotSimulationResolver
             $stock = min(1000, (int) ceil($stock * (float) ($technologyEffects['stockMultipliers'][$resource['id']] ?? 1)));
             $respawnDuration = (float) $resource['respawnSeconds'] * (float) ($technologyEffects['respawnTimeMultipliers'][$resource['id']] ?? 1);
             $sites[] = [
-                'id' => "site-{$index}", 'x' => $slot['x'], 'z' => $slot['z'],
+                'id' => "block-{$index}", 'x' => $slot['x'], 'z' => $slot['z'],
                 'resource' => $resource['id'], 'stock' => $stock, 'remaining' => $stock,
                 'respawn' => 0.0, 'respawn_duration' => $respawnDuration, 'scanned' => false,
             ];
@@ -124,8 +125,13 @@ class RobotSimulationResolver
         return $state / 4294967296;
     }
 
-    private function stepRobot(array &$robot, array &$nodes, float $dt, array $upgrades, array $rewards, array $resources, array $technologyEffects, array &$robots, array &$payouts): void
+    private function stepRobot(array &$robot, array &$nodes, array &$drops, float $dt, array $upgrades, array $rewards, array $resources, array $technologyEffects, array &$robots, array &$payouts): void
     {
+        if (! empty($robot['automation'])) {
+            $this->stepAutomaticRobot($robot, $nodes, $drops, $dt, $upgrades, $rewards, $resources, $technologyEffects, $robots, $payouts);
+
+            return;
+        }
         $program = $robot['program'];
         if (! $program && $robot['phase'] === 'idle') {
             $robot['status'] = 'Waiting for a program';
@@ -148,7 +154,7 @@ class RobotSimulationResolver
                             break;
                         }
                     }
-                    $target = $this->findSite($robot, $nodes, $resource);
+                    $target = $this->findSite($robot, $nodes, $resource, $robots);
                     if ($target === null) {
                         $robot['status'] = 'No matching salvage nearby';
 
@@ -222,7 +228,10 @@ class RobotSimulationResolver
 
                 return;
             }
-            if ($this->moveToward($robot, $destination, $dt, $upgrades, $robots, $technologyEffects)) {
+            if ($robot['target'] !== null) {
+                $destination = $this->blockApproachPoint($robot, $nodes[$robot['target']], $nodes) ?? $destination;
+            }
+            if ($this->moveToward($robot, $destination, $dt, $upgrades, $robots, $technologyEffects, $nodes, $robot['target'] === null)) {
                 $robot['destination'] = null;
                 $robot['phase'] = 'idle';
                 $this->next($robot);
@@ -266,7 +275,10 @@ class RobotSimulationResolver
 
                 return;
             }
-            $rate = $robot['kind'] === 'scrap_hound' ? 1.7 : ($robot['kind'] === 'fabricator' ? .72 : 1.0);
+            $rate = match ($robot['kind']) {
+                'scrap_hound' => 1.7, 'fabricator' => .72, 'sky_miner' => .42,
+                'block_miner' => 2.0, 'cargo_hauler' => .8, default => 1.0,
+            };
             $robot['work'] += $dt * $rate * (! empty($upgrades['servo']) ? 1.25 : 1);
             while ($robot['work'] >= 1 && $nodes[$target]['remaining'] > 0 && $robot['cargo'] < $this->capacity($robot)) {
                 $robot['work'] -= 1;
@@ -281,7 +293,7 @@ class RobotSimulationResolver
                 $robot['status'] = 'Returning with cargo';
             }
         } elseif ($robot['phase'] === 'return') {
-            if ($this->moveToward($robot, self::HOME, $dt, $upgrades, $robots, $technologyEffects)) {
+            if ($this->moveToward($robot, self::HOME, $dt, $upgrades, $robots, $technologyEffects, $nodes)) {
                 if ($robot['cargo'] > 0) {
                     $definition = collect($resources)->firstWhere('id', $robot['cargo_type']);
                     $currency = $definition['currency'] ?? $robot['cargo_type'];
@@ -313,11 +325,129 @@ class RobotSimulationResolver
         }
     }
 
-    private function findSite(array $robot, array $nodes, string $resource): ?int
+    private function stepAutomaticRobot(array &$robot, array &$nodes, array &$drops, float $dt, array $upgrades, array $rewards, array $resources, array $technologyEffects, array &$robots, array &$payouts): void
     {
+        $kind = $robot['kind'];
+        $isMiner = in_array($kind, ['scrap_hound', 'fabricator', 'block_miner', 'sky_miner'], true);
+        $isGeneralist = $kind === 'scavenger';
+        if ($kind === 'buffer_bot') {
+            foreach ($robots as $other) {
+                if ($other['id'] !== $robot['id'] && in_array($other['phase'], ['travel', 'mining'], true)
+                    && in_array($other['kind'], ['scavenger', 'scrap_hound', 'fabricator', 'block_miner', 'sky_miner'], true)) {
+                    $robot['x'] = $other['x'] - .9; $robot['z'] = $other['z'] - .9;
+                    $robot['status'] = 'Boosting nearby bots'; $robot['phase'] = 'support';
+
+                    return;
+                }
+            }
+            $robot['phase'] = 'support'; $robot['status'] = 'Buffer ready at depot';
+
+            return;
+        }
+
+        if ($robot['phase'] === 'return') {
+            if ($this->moveToward($robot, self::HOME, $dt, $upgrades, $robots, $technologyEffects, $nodes)) {
+                if ($robot['cargo'] > 0) {
+                    $definition = collect($resources)->firstWhere('id', $robot['cargo_type']);
+                    $currency = $definition['currency'] ?? $robot['cargo_type'];
+                    $bonus = (float) ($technologyEffects['deliveryValueMultipliers'][$robot['cargo_type']] ?? 1);
+                    $amount = (int) floor($robot['cargo'] * (int) ($definition['valuePerCargo'] ?? 0) * $bonus);
+                    $payouts[] = ['robot_id' => $robot['id'], 'resource' => $currency, 'cargo_resource' => $robot['cargo_type'], 'cargo' => $robot['cargo'], 'amount' => $amount];
+                }
+                $robot['cargo'] = 0; $robot['target'] = null; $robot['target_drop'] = null;
+                $robot['phase'] = 'idle'; $robot['status'] = 'Cargo delivered';
+            }
+
+            return;
+        }
+
+        if ($robot['phase'] === 'travel') {
+            $destination = $robot['target_drop'] !== null
+                ? ($drops[$robot['target_drop']] ?? null)
+                : ($robot['target'] !== null ? ($nodes[$robot['target']] ?? null) : null);
+            if (! $destination) { $robot['target'] = null; $robot['target_drop'] = null; $robot['phase'] = 'idle'; return; }
+            $goal = $robot['target_drop'] !== null
+                ? $this->dropApproachPoint($robot, $destination, $nodes)
+                : $this->blockApproachPoint($robot, $destination, $nodes);
+            if ($goal === null) { $robot['target'] = null; $robot['target_drop'] = null; $robot['phase'] = 'idle'; $robot['status'] = 'Target blocked; choosing another route'; return; }
+            if ($this->moveToward($robot, $goal, $dt, $upgrades, $robots, $technologyEffects, $nodes, false)) {
+                $robot['phase'] = $robot['target_drop'] !== null ? 'pickup' : 'mining';
+                $robot['work'] = 0;
+                $robot['status'] = $robot['phase'] === 'pickup' ? 'Picking up dropped resource' : 'Breaking resource block';
+                $robot['navigation_goal'] = null; $robot['best_distance'] = null; $robot['stalled_ticks'] = 0;
+            } elseif ($this->updateNavigationProgress($robot, $goal)) {
+                $robot['target'] = null; $robot['target_drop'] = null; $robot['phase'] = 'idle'; $robot['status'] = 'Route blocked; choosing another target';
+                $robot['navigation_goal'] = null; $robot['best_distance'] = null; $robot['stalled_ticks'] = 0;
+            }
+
+            return;
+        }
+
+        if ($robot['phase'] === 'mining') {
+            $index = $robot['target'];
+            if ($index === null || ! isset($nodes[$index]) || $nodes[$index]['remaining'] <= 0) { $robot['target'] = null; $robot['phase'] = 'idle'; return; }
+            $supported = false;
+            foreach ($robots as $other) if ($other['kind'] === 'buffer_bot' && hypot($other['x'] - $robot['x'], $other['z'] - $robot['z']) <= 2.5) $supported = true;
+            $rate = $kind === 'sky_miner' ? .42 : ($kind === 'block_miner' ? 2.0 : ($kind === 'fabricator' ? 1.1 : ($kind === 'scrap_hound' ? 1.7 : 1.0)));
+            $robot['work'] += $dt * $rate * ($supported ? 1.5 : 1);
+            while ($robot['work'] >= 1 && $nodes[$index]['remaining'] > 0) { $robot['work']--; $nodes[$index]['remaining']--; }
+            if ($nodes[$index]['remaining'] <= 0) {
+                $amount = max(1, (int) ceil($nodes[$index]['stock'] / 3));
+                $dropId = 'drop-'.$nodes[$index]['id'].'-'.count($drops);
+                $drops[$dropId] = ['id' => $dropId, 'x' => $nodes[$index]['x'], 'z' => $nodes[$index]['z'], 'resource' => $nodes[$index]['resource'], 'amount' => $amount];
+                $nodes[$index]['respawn'] = $nodes[$index]['respawn_duration'];
+                $robot['target'] = null; $robot['phase'] = 'idle'; $robot['status'] = "Block broken · {$amount} {$nodes[$index]['resource']} dropped";
+            }
+
+            return;
+        }
+
+        if ($robot['phase'] === 'pickup') {
+            $drop = $robot['target_drop'] !== null ? ($drops[$robot['target_drop']] ?? null) : null;
+            if (! $drop || $drop['amount'] <= 0) { $robot['target_drop'] = null; $robot['phase'] = 'idle'; return; }
+            $capacity = $kind === 'cargo_hauler' ? 8 : ($kind === 'fabricator' ? 6 : 4);
+            $amount = min($drop['amount'], $capacity - $robot['cargo']);
+            $robot['cargo'] += $amount; $robot['cargo_type'] = $drop['resource']; $drops[$robot['target_drop']]['amount'] -= $amount;
+            if ($drops[$robot['target_drop']]['amount'] <= 0) unset($drops[$robot['target_drop']]);
+            $robot['target_drop'] = null; $robot['phase'] = 'return'; $robot['status'] = 'Returning with mined resources';
+
+            return;
+        }
+
+        $reservedBlocks = $reservedDrops = [];
+        foreach ($robots as $other) if ($other['id'] !== $robot['id']) {
+            if ($other['target'] !== null) $reservedBlocks[$other['target']] = true;
+            if ($other['target_drop'] !== null) $reservedDrops[$other['target_drop']] = true;
+        }
+        $dropIds = array_keys(array_filter($drops, fn (array $drop, string $id): bool => $drop['amount'] > 0 && ! isset($reservedDrops[$id]), ARRAY_FILTER_USE_BOTH));
+        usort($dropIds, fn (string $a, string $b): int => hypot($drops[$a]['x'] - $robot['x'], $drops[$a]['z'] - $robot['z']) <=> hypot($drops[$b]['x'] - $robot['x'], $drops[$b]['z'] - $robot['z']));
+        if (! $isMiner && $dropIds) {
+            $robot['target_drop'] = $dropIds[0]; $robot['phase'] = 'travel'; $robot['status'] = 'Driving to dropped resource';
+
+            return;
+        }
+        if (! $isMiner && ! $isGeneralist) { $robot['status'] = 'Waiting for mined resources'; return; }
+        $blockIds = [];
+        foreach ($nodes as $index => $node) {
+            if ($node['remaining'] > 0 && ! isset($reservedBlocks[$index]) && $this->blockApproachPoint($robot, $node, $nodes) !== null) $blockIds[] = $index;
+        }
+        usort($blockIds, fn (int $a, int $b): int => hypot($nodes[$a]['x'] - $robot['x'], $nodes[$a]['z'] - $robot['z']) <=> hypot($nodes[$b]['x'] - $robot['x'], $nodes[$b]['z'] - $robot['z']));
+        if (! $blockIds) { $robot['status'] = 'Waiting for available block'; return; }
+        $robot['target'] = $blockIds[0]; $robot['phase'] = 'travel'; $robot['status'] = 'Moving to resource block';
+    }
+
+    private function findSite(array $robot, array $nodes, string $resource, array $robots): ?int
+    {
+        $assigned = [];
+        foreach ($robots as $other) {
+            if ($other['id'] !== $robot['id'] && $other['target'] !== null) {
+                $assigned[$other['target']] = true;
+            }
+        }
         $ids = [];
         foreach ($nodes as $index => $node) {
-            if ($node['resource'] === $resource && $node['remaining'] > 0) {
+            if ($node['resource'] === $resource && $node['remaining'] > 0 && ! isset($assigned[$index])
+                && $this->blockApproachPoint($robot, $node, $nodes) !== null) {
                 $ids[] = $index;
             }
         }
@@ -328,7 +458,7 @@ class RobotSimulationResolver
 
     private function capacity(array $robot): int
     {
-        return $robot['kind'] === 'fabricator' ? 6 : 4;
+        return $robot['kind'] === 'cargo_hauler' ? 8 : ($robot['kind'] === 'fabricator' ? 6 : 4);
     }
 
     private function next(array &$robot, int $amount = 1): void
@@ -339,10 +469,10 @@ class RobotSimulationResolver
         }
     }
 
-    private function moveToward(array &$robot, array $destination, float $dt, array $upgrades, array $robots, array $technologyEffects): bool
+    private function moveToward(array &$robot, array $destination, float $dt, array $upgrades, array $robots, array $technologyEffects, array $nodes = [], bool $useBerth = true): bool
     {
-        $usesBerth = $robot['target'] !== null || $robot['phase'] === 'return'
-            || ($robot['phase'] === 'travel' && count($robots) > 1);
+        $usesBerth = $useBerth && ($robot['target'] !== null || $robot['phase'] === 'return'
+            || ($robot['phase'] === 'travel' && count($robots) > 1));
         if ($usesBerth) {
             if ($robot['id'] > 0) {
                 $angle = $robot['id'] * 2.399963229728653;
@@ -352,7 +482,8 @@ class RobotSimulationResolver
         $dx = $destination['x'] - $robot['x'];
         $dz = $destination['z'] - $robot['z'];
         $distance = hypot($dx, $dz);
-        $speed = ($robot['kind'] === 'scrap_hound' ? 2.5 : 1.8) * (! empty($upgrades['servo']) ? 1.25 : 1);
+        $baseSpeed = match ($robot['kind']) { 'sky_miner' => 3.2, 'scrap_hound' => 2.5, 'cargo_hauler' => 1.55, default => 1.8 };
+        $speed = $baseSpeed * (! empty($upgrades['servo']) ? 1.25 : 1);
         if ($distance <= 0.000001) {
             return true;
         }
@@ -361,6 +492,10 @@ class RobotSimulationResolver
         $step = min($speed * $dt, $distance);
         $angle = atan2($dz, $dx);
         $side = $robot['id'] % 2 === 0 ? 1 : -1;
+        $movementObstacles = $this->obstaclesFor($technologyEffects);
+        if ($robot['kind'] !== 'sky_miner') {
+            foreach ($nodes as $node) if ($node['remaining'] > 0) $movementObstacles[] = ['x' => $node['x'], 'z' => $node['z'], 'radius' => .72];
+        }
         $offsets = [0.0];
         for ($turn = 1; $turn <= 8; $turn++) {
             $offsets[] = $side * $turn * .35;
@@ -373,7 +508,7 @@ class RobotSimulationResolver
             if (abs($nextX) > 16 || abs($nextZ) > 10) {
                 continue;
             }
-            $clear = ! $this->blockedByObstacle($nextX, $nextZ, $this->obstaclesFor($technologyEffects));
+            $clear = ! $this->blockedByObstacle($nextX, $nextZ, $movementObstacles);
             foreach ($robots as $other) {
                 if (! $clear) {
                     break;
@@ -409,6 +544,41 @@ class RobotSimulationResolver
         }
 
         return $obstacles;
+    }
+
+    private function blockApproachPoint(array $robot, array $block, array $nodes): ?array
+    {
+        $clearance = .96;
+        $points = [
+            ['x' => $block['x'] + $clearance, 'z' => $block['z']],
+            ['x' => $block['x'] - $clearance, 'z' => $block['z']],
+            ['x' => $block['x'], 'z' => $block['z'] + $clearance],
+            ['x' => $block['x'], 'z' => $block['z'] - $clearance],
+        ];
+        $obstacles = $this->obstaclesFor([]);
+        foreach ($nodes as $node) {
+            if ($node['remaining'] > 0) $obstacles[] = ['x' => $node['x'], 'z' => $node['z'], 'radius' => .72];
+        }
+        $points = array_values(array_filter($points, fn (array $point): bool =>
+            abs($point['x']) <= 16 && abs($point['z']) <= 10
+            && ! $this->blockedByObstacle($point['x'], $point['z'], $obstacles)
+        ));
+        usort($points, fn (array $left, array $right): int =>
+            hypot($left['x'] - $robot['x'], $left['z'] - $robot['z']) <=> hypot($right['x'] - $robot['x'], $right['z'] - $robot['z'])
+        );
+
+        return $points[0] ?? null;
+    }
+
+    private function dropApproachPoint(array $robot, array $drop, array $nodes): ?array
+    {
+        foreach ($nodes as $node) {
+            if ($node['remaining'] > 0 && $node['x'] === $drop['x'] && $node['z'] === $drop['z']) {
+                return $this->blockApproachPoint($robot, $node, $nodes);
+            }
+        }
+
+        return ['x' => $drop['x'], 'z' => $drop['z']];
     }
 
     private function blockedByObstacle(float $x, float $z, array $obstacles, float $extraClearance = 0): bool

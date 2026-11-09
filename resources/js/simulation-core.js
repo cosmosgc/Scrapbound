@@ -12,19 +12,18 @@ export const NAVIGATION_OBSTACLES = Object.freeze([
 ]);
 
 const SITE_SLOTS = [];
-for (let z = FIELD_BOUNDS.minZ + 1; z < FIELD_BOUNDS.maxZ; z++) {
-  for (let x = FIELD_BOUNDS.minX + 1; x < FIELD_BOUNDS.maxX; x++) {
-    // The central operating platform/depot occupies this reserved grid region.
-    if (Math.abs(x) <= 6 && Math.abs(z) <= 4) continue;
-    if (NAVIGATION_OBSTACLES.some(obstacle => Math.hypot(x - obstacle.x, z - obstacle.z) < obstacle.radius + .3)) continue;
+for (let z = -9; z <= 9; z += 2) {
+  for (let x = -15; x <= 15; x += 2) {
+    // Solid voxel blocks fill the mining field; keep the depot/platform clear.
+    if (Math.abs(x) <= 5 && Math.abs(z) <= 3) continue;
     SITE_SLOTS.push([x, z]);
   }
 }
 
 let RESOURCE_DEFINITIONS = [
-  { id: 'credits', currency: 'credits', valuePerCargo: 5, spawnWeight: 1, minStock: 4, maxStock: 6, respawnSeconds: 5, zone: 'frontier' },
-  { id: 'scrap', currency: 'scrap', valuePerCargo: 2, spawnWeight: 1, minStock: 5, maxStock: 7, respawnSeconds: 5, zone: 'frontier' },
-  { id: 'alloy', currency: 'credits', valuePerCargo: 18, spawnWeight: .5, minStock: 2, maxStock: 4, respawnSeconds: 5, zone: 'quarry', unlockNode: 'prospecting' },
+  { id: 'credits', currency: 'credits', valuePerCargo: 5, spawnWeight: 1, minStock: 4, maxStock: 6, respawnSeconds: 60, zone: 'frontier' },
+  { id: 'scrap', currency: 'scrap', valuePerCargo: 2, spawnWeight: 1, minStock: 5, maxStock: 7, respawnSeconds: 60, zone: 'frontier' },
+  { id: 'alloy', currency: 'credits', valuePerCargo: 18, spawnWeight: .5, minStock: 2, maxStock: 4, respawnSeconds: 60, zone: 'quarry', unlockNode: 'prospecting' },
 ];
 
 export function salvageSitesForSeed(seed = 7, resources = RESOURCE_DEFINITIONS, technologyEffects = {}) {
@@ -43,7 +42,7 @@ export function salvageSitesForSeed(seed = 7, resources = RESOURCE_DEFINITIONS, 
   const unlockedZones = [...new Set(['frontier', ...(technologyEffects.unlockZones || [])])];
   const eligible = resources.filter(resource => (!resource.unlockNode || unlocked.includes(resource.id))
     && (!resource.zone || unlockedZones.includes(resource.zone)));
-  return slots.slice(0, 8).map((slot, index) => {
+  return slots.map((slot, index) => {
     const totalWeight = eligible.reduce((sum, resource) => sum + resource.spawnWeight * (technologyEffects.spawnWeightMultipliers?.[resource.id] ?? 1), 0);
     let roll = random() * totalWeight;
     let resource = eligible[0];
@@ -54,7 +53,7 @@ export function salvageSitesForSeed(seed = 7, resources = RESOURCE_DEFINITIONS, 
     const baseStock = resource.minStock + Math.floor(random() * (resource.maxStock - resource.minStock + 1));
     const stock = Math.min(1000, Math.ceil(baseStock * (technologyEffects.stockMultipliers?.[resource.id] ?? 1)));
     const respawnSeconds = resource.respawnSeconds * (technologyEffects.respawnTimeMultipliers?.[resource.id] ?? 1);
-    return { id: `site-${index}`, x: slot.x, z: slot.z, resource: resource.id, stock, respawnSeconds };
+    return { id: `block-${index}`, x: slot.x, z: slot.z, resource: resource.id, stock, respawnSeconds };
   });
 }
 
@@ -82,10 +81,12 @@ export class SalvageSimulation {
     this.nextEventId = 1;
     this.activeProgram = [...DEFAULT_PROGRAM];
     this.unitPrograms = {};
+    this.rolePrograms = {};
     this.upgrades = {};
     this.elapsed = 0;
     this.nodes = salvageSitesForSeed(this.seed, this.resourceDefinitions, this.technologyEffects).map(site => ({ ...site, remaining: site.stock, respawn: 0, scanned: false }));
     this.robots = [];
+    this.drops = [];
   }
 
   setWorldSeed(seed) {
@@ -107,7 +108,7 @@ export class SalvageSimulation {
     return true;
   }
 
-  applyWorldSnapshot(nodes) {
+  applyWorldSnapshot(nodes, drops = []) {
     if (!Array.isArray(nodes) || nodes.length !== this.nodes.length) return false;
     const incoming = new Map(nodes.map(node => [node.id, node]));
     if (this.nodes.some(node => !incoming.has(node.id))) return false;
@@ -117,8 +118,16 @@ export class SalvageSimulation {
         || !this.resourceDefinitions.some(resource => resource.id === value.resource) || !Number.isFinite(value.stock) || !Number.isFinite(value.remaining)) return node;
       return { ...node, x: value.x, z: value.z, resource: value.resource, stock: value.stock,
         remaining: value.remaining, scanned: Boolean(value.scanned),
+        ...(Number.isFinite(value.respawnRemaining) && value.respawnRemaining >= 0 ? { respawn: value.respawnRemaining } : {}),
         ...(Number.isFinite(value.respawnSeconds) && value.respawnSeconds > 0 ? { respawnSeconds: value.respawnSeconds } : {}) };
     });
+    if (Array.isArray(drops) && drops.length <= 500) {
+      const validResources = new Set(this.resourceDefinitions.map(resource => resource.id));
+      this.drops = drops.filter(drop => drop && typeof drop.id === 'string' && drop.id.length <= 80
+        && Number.isFinite(drop.x) && Number.isFinite(drop.z) && Math.abs(drop.x) <= 16 && Math.abs(drop.z) <= 10
+        && validResources.has(drop.resource) && Number.isInteger(drop.amount) && drop.amount > 0)
+        .map(drop => ({ id: drop.id, x: drop.x, z: drop.z, resource: drop.resource, amount: Math.min(1000, drop.amount) }));
+    }
     return true;
   }
 
@@ -127,11 +136,15 @@ export class SalvageSimulation {
     const old = this.robots.length;
     this.robots.length = count;
     for (let i = old; i < count; i++) {
-      const kind = i < (owned.scavenger || 0) ? 'scavenger' : i < (owned.scavenger || 0) + (owned.scrap_hound || 0) ? 'scrap_hound' : 'fabricator';
+      let kind = 'scavenger', boundary = 0;
+      for (const [candidate, amount] of Object.entries(owned)) {
+        boundary += Math.max(0, Number(amount) || 0);
+        if (i < boundary) { kind = candidate; break; }
+      }
       this.robots[i] = {
         id: i, kind, x: HOME.x + (i % 3 - 1) * .85, z: HOME.z + 1.1 + Math.floor(i / 3) * .8,
-        program: (this.unitPrograms[i] || this.activeProgram).map(step => ({ ...step })), command: 0, phase: 'idle', targetId: null,
-        cargo: 0, cargoType: 'credits', work: 0, wait: 0, status: 'Ready',
+        program: (this.unitPrograms[i] || this.rolePrograms[kind] || this.activeProgram).map(step => ({ ...step })), command: 0, phase: 'idle', targetId: null,
+        cargo: 0, cargoType: 'credits', work: 0, wait: 0, status: 'Ready', automation: !this.unitPrograms[i] && !this.rolePrograms[kind] && JSON.stringify(this.activeProgram) === JSON.stringify(DEFAULT_PROGRAM),
         navigationGoal: null, bestDistance: null, stalledTicks: 0,
       };
     }
@@ -148,7 +161,11 @@ export class SalvageSimulation {
         if (Number.isInteger(unitId) && unitId >= 0 && safeProgram.length) this.unitPrograms[unitId] = safeProgram;
       }
     }
-    this.robots.forEach(robot => this.applyProgram(robot, this.unitPrograms[robot.id] || this.activeProgram));
+    this.robots.forEach(robot => {
+      const program = this.unitPrograms[robot.id] || this.rolePrograms[robot.kind] || this.activeProgram;
+      this.applyProgram(robot, program);
+      robot.automation = !this.rolePrograms[robot.kind] && JSON.stringify(program) === JSON.stringify(DEFAULT_PROGRAM);
+    });
   }
 
   assignments() {
@@ -157,16 +174,31 @@ export class SalvageSimulation {
 
   deploy(program, targetId = null) {
     const safeProgram = parseProgram(program);
+    const automatic = JSON.stringify(safeProgram) === JSON.stringify(DEFAULT_PROGRAM);
     if (targetId === null || targetId === 'all') {
       this.activeProgram = safeProgram.map(step => ({ ...step }));
       this.unitPrograms = {};
-      this.robots.forEach(robot => this.applyProgram(robot, this.activeProgram));
+      this.rolePrograms = {};
+      this.robots.forEach(robot => { this.applyProgram(robot, this.activeProgram); robot.automation = automatic; });
     } else {
       const robot = this.robots[Number(targetId)];
       if (!robot) return 0;
       this.unitPrograms[robot.id] = safeProgram.map(step => ({ ...step }));
       this.applyProgram(robot, safeProgram);
+      robot.automation = automatic;
     }
+    return safeProgram.length;
+  }
+
+  deployRole(kind, program) {
+    const safeProgram = parseProgram(program);
+    if (!safeProgram.length) return 0;
+    this.rolePrograms[kind] = safeProgram;
+    this.robots.filter(robot => robot.kind === kind).forEach(robot => {
+      delete this.unitPrograms[robot.id];
+      this.applyProgram(robot, safeProgram);
+      robot.automation = false;
+    });
     return safeProgram.length;
   }
 
@@ -189,16 +221,21 @@ export class SalvageSimulation {
         if (node.respawn <= 0) { node.remaining = node.stock; node.scanned = false; }
       }
     }
+    this.drops = this.drops.filter(drop => drop.amount > 0);
     this.robots.forEach(robot => this.stepRobot(robot, dt));
   }
 
   stepRobot(robot, dt) {
+    if (robot.automation && ['scavenger', 'scrap_hound', 'fabricator', 'block_miner', 'sky_miner', 'cargo_hauler', 'buffer_bot'].includes(robot.kind)) {
+      this.stepAutomaticRobot(robot, dt);
+      return;
+    }
     const input = robot.manualInput || { x: 0, z: 0 };
     if (input.x || input.z) {
       if (!robot.manualActive) { robot.phase = 'manual'; robot.targetId = null; robot.destination = null; }
       robot.manualActive = true; robot.phase = 'manual'; robot.status = 'Manual pilot';
       const length = Math.hypot(input.x, input.z) || 1;
-      const speed = (robot.kind === 'scrap_hound' ? 2.5 : 1.8) * (this.upgrades.servo ? 1.25 : 1);
+      const speed = this.movementSpeed(robot) * (this.upgrades.servo ? 1.25 : 1);
       const angle = Math.atan2(input.z / length, input.x / length), side = robot.id % 2 === 0 ? 1 : -1;
       const offsets = [0];
       for (let turn = 1; turn <= 8; turn++) offsets.push(side * turn * .35, -side * turn * .35);
@@ -250,9 +287,11 @@ export class SalvageSimulation {
     }
 
     if (robot.phase === 'travel') {
-      const target = this.target(robot) || robot.destination;
+    const entity = this.target(robot) || this.drops.find(drop => drop.id === robot.targetId);
+    const target = entity ? (this.target(robot) ? this.blockApproachPoint(robot, entity) : this.dropApproachPoint(robot, entity)) : robot.destination;
+    if (!target) { robot.targetId = null; robot.phase = 'idle'; return; }
       if (!target || (target.remaining !== undefined && target.remaining <= 0)) { robot.targetId = null; robot.phase = 'idle'; return; }
-      if (this.moveToward(robot, target, dt)) {
+      if (this.moveToward(robot, target, dt, !entity)) {
         robot.destination = null; robot.phase = 'idle';
         if (robot.program.length) this.next(robot); else robot.status = 'Waypoint reached';
         robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0;
@@ -282,7 +321,7 @@ export class SalvageSimulation {
         else { robot.phase = 'idle'; robot.targetId = null; this.next(robot); }
         return;
       }
-      const rate = robot.kind === 'scrap_hound' ? 1.7 : robot.kind === 'fabricator' ? .72 : 1;
+      const rate = robot.kind === 'scrap_hound' ? 1.7 : robot.kind === 'fabricator' ? .72 : robot.kind === 'sky_miner' ? .42 : robot.kind === 'block_miner' ? 2 : robot.kind === 'cargo_hauler' ? .8 : 1;
       robot.work += dt * rate * (this.upgrades.servo ? 1.25 : 1);
       while (robot.work >= 1 && target.remaining > 0 && robot.cargo < this.capacity(robot)) {
         robot.work -= 1; target.remaining -= 1; robot.cargo += 1;
@@ -314,7 +353,100 @@ export class SalvageSimulation {
     }
   }
 
-  capacity(robot) { return robot.kind === 'fabricator' ? 6 : 4; }
+  stepAutomaticRobot(robot, dt) {
+    if (robot.kind === 'buffer_bot') {
+      const supported = this.robots.find(other => other.id !== robot.id && ['mining', 'travel'].includes(other.phase) && ['fabricator', 'block_miner', 'sky_miner', 'scavenger'].includes(other.kind));
+      if (supported) {
+        robot.x = supported.x - .9; robot.z = supported.z - .9;
+        robot.status = `Boosting unit ${String(supported.id + 1).padStart(2, '0')}`;
+      } else robot.status = 'Buffer ready at depot';
+      robot.phase = 'support';
+      return;
+    }
+
+    const isMiner = ['scrap_hound', 'fabricator', 'block_miner', 'sky_miner'].includes(robot.kind);
+    const isGeneralist = robot.kind === 'scavenger';
+    const assigned = new Set(this.robots.filter(other => other.id !== robot.id && other.targetId !== null).map(other => other.targetId));
+
+    if (robot.phase === 'return') {
+      if (this.moveToward(robot, HOME, dt)) {
+        if (robot.cargo > 0) {
+          const definition = this.resourceDefinitions.find(resource => resource.id === robot.cargoType);
+          const currency = definition?.currency || robot.cargoType;
+          const amount = Math.floor(robot.cargo * (definition?.valuePerCargo || 0) * (this.technologyEffects.deliveryValueMultipliers?.[robot.cargoType] ?? 1));
+          this.recordEvent('delivery', { robotId: robot.id, resource: currency, cargoResource: robot.cargoType, cargo: robot.cargo, amount });
+          this.onDelivery(currency, amount, robot);
+        }
+        robot.cargo = 0; robot.targetId = null; robot.phase = 'idle'; robot.status = 'Cargo delivered';
+      }
+      return;
+    }
+
+    if (robot.phase === 'travel') {
+      const block = this.nodes.find(node => node.id === robot.targetId);
+      const drop = this.drops.find(entry => entry.id === robot.targetId && entry.amount > 0);
+      const target = block || drop;
+      if (!target) { robot.targetId = null; robot.phase = 'idle'; return; }
+      const goal = block ? this.blockApproachPoint(robot, block) : this.dropApproachPoint(robot, drop);
+      if (!goal) { robot.targetId = null; robot.phase = 'idle'; robot.status = 'Target blocked; choosing another route'; return; }
+      if (this.moveToward(robot, goal, dt, false)) {
+        robot.phase = block ? 'mining' : 'pickup';
+        robot.work = 0;
+        robot.status = block ? 'Breaking resource block' : 'Picking up dropped resource';
+        robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0;
+      } else if (this.updateNavigationProgress(robot, goal)) {
+        robot.targetId = null; robot.phase = 'idle'; robot.status = 'Route blocked; choosing another target';
+        robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0;
+      }
+      return;
+    }
+
+    if (robot.phase === 'mining') {
+      const block = this.nodes.find(node => node.id === robot.targetId);
+      if (!block || block.remaining <= 0) { robot.targetId = null; robot.phase = 'idle'; return; }
+      const supported = this.robots.some(other => other.kind === 'buffer_bot' && Math.hypot(other.x - robot.x, other.z - robot.z) <= 2.5);
+      const rate = robot.kind === 'sky_miner' ? .42 : robot.kind === 'block_miner' ? 2 : robot.kind === 'fabricator' ? 1.1 : robot.kind === 'scrap_hound' ? 1.7 : 1;
+      robot.work += dt * rate * (supported ? 1.5 : 1);
+      while (robot.work >= 1 && block.remaining > 0) {
+        robot.work--;
+        block.remaining--;
+      }
+      if (block.remaining <= 0) {
+        const amount = Math.max(1, Math.ceil(block.stock / 3));
+        this.drops.push({ id: `drop-${block.id}-${this.nextEventId}`, x: block.x, z: block.z, resource: block.resource, amount });
+        block.respawn = block.respawnSeconds;
+        this.recordEvent('block_break', { robotId: robot.id, blockId: block.id, resource: block.resource, amount });
+        robot.targetId = null; robot.phase = 'idle'; robot.status = `Block broken · ${amount} ${block.resource} dropped`;
+      }
+      return;
+    }
+
+    if (robot.phase === 'pickup') {
+      const drop = this.drops.find(entry => entry.id === robot.targetId && entry.amount > 0);
+      if (!drop) { robot.targetId = null; robot.phase = 'idle'; return; }
+      const quantity = Math.min(drop.amount, this.capacity(robot) - robot.cargo);
+      drop.amount -= quantity; robot.cargo += quantity; robot.cargoType = drop.resource;
+      this.recordEvent('pickup', { robotId: robot.id, dropId: drop.id, resource: drop.resource, amount: quantity });
+      robot.targetId = null; robot.phase = 'return'; robot.status = 'Returning with mined resources';
+      return;
+    }
+
+    if (robot.cargo >= this.capacity(robot)) { robot.phase = 'return'; return; }
+    const availableDrop = this.drops.filter(drop => drop.amount > 0 && !assigned.has(drop.id))
+      .sort((a, b) => Math.hypot(a.x - robot.x, a.z - robot.z) - Math.hypot(b.x - robot.x, b.z - robot.z))[0];
+    if (!isMiner && availableDrop) {
+      robot.targetId = availableDrop.id; robot.phase = 'travel'; robot.status = 'Driving to dropped resource';
+      return;
+    }
+    if (!isMiner && !isGeneralist) { robot.status = 'Waiting for mined resources'; return; }
+    const block = this.nodes.filter(node => node.remaining > 0 && !assigned.has(node.id) && this.blockApproachPoint(robot, node))
+      .sort((a, b) => Math.hypot(a.x - robot.x, a.z - robot.z) - Math.hypot(b.x - robot.x, b.z - robot.z))[0];
+    if (!block) { robot.status = 'Waiting for available block'; return; }
+    robot.targetId = block.id; robot.phase = 'travel'; robot.status = 'Moving to resource block';
+  }
+
+  capacity(robot) { return robot.kind === 'cargo_hauler' ? 8 : robot.kind === 'fabricator' ? 6 : 4; }
+  movementSpeed(robot) { return robot.kind === 'sky_miner' ? 3.2 : robot.kind === 'scrap_hound' ? 2.5 : robot.kind === 'cargo_hauler' ? 1.55 : 1.8; }
   manualInput(robotId, x, z) {
     const robot = this.robots[Number(robotId)];
     if (!robot) return false;
@@ -337,15 +469,30 @@ export class SalvageSimulation {
     return event;
   }
   target(robot) { return this.nodes.find(node => node.id === robot.targetId) || null; }
+  blockApproachPoint(robot, block) {
+    const clearance = .96;
+    const points = [
+      { x: block.x + clearance, z: block.z }, { x: block.x - clearance, z: block.z },
+      { x: block.x, z: block.z + clearance }, { x: block.x, z: block.z - clearance },
+    ];
+    return points.filter(point => this.positionIsClear(robot, point.x, point.z))
+      .sort((a, b) => Math.hypot(a.x - robot.x, a.z - robot.z) - Math.hypot(b.x - robot.x, b.z - robot.z))[0] || null;
+  }
+  dropApproachPoint(robot, drop) {
+    const respawnedBlock = this.nodes.find(node => node.x === drop.x && node.z === drop.z && node.remaining > 0);
+    return respawnedBlock ? this.blockApproachPoint(robot, respawnedBlock) : { x: drop.x, z: drop.z };
+  }
   findSite(robot, resource) {
-    const candidates = this.nodes.filter(node => node.resource === resource && node.remaining > 0);
+    const assigned = new Set(this.robots.filter(other => other.id !== robot.id && other.targetId !== null).map(other => other.targetId));
+    const candidates = this.nodes.filter(node => node.resource === resource && node.remaining > 0 && !assigned.has(node.id)
+      && this.blockApproachPoint(robot, node));
     candidates.sort((a, b) => Math.hypot(a.x - robot.x, a.z - robot.z) - Math.hypot(b.x - robot.x, b.z - robot.z));
     return candidates[0] || null;
   }
   next(robot, amount = 1) { robot.command = (robot.command + amount) % robot.program.length; }
-  moveToward(robot, destination, dt) {
-    const usesBerth = robot.targetId !== null || robot.phase === 'return'
-      || (robot.phase === 'travel' && this.robots.length > 1);
+  moveToward(robot, destination, dt, useBerth = true) {
+    const usesBerth = useBerth && (robot.targetId !== null || robot.phase === 'return'
+      || (robot.phase === 'travel' && this.robots.length > 1));
     if (usesBerth) {
       if (robot.id > 0) {
         const angle = robot.id * 2.399963229728653;
@@ -353,7 +500,7 @@ export class SalvageSimulation {
       }
     }
     const dx = destination.x - robot.x, dz = destination.z - robot.z;
-    const distance = Math.hypot(dx, dz), speed = (robot.kind === 'scrap_hound' ? 2.5 : 1.8) * (this.upgrades.servo ? 1.25 : 1);
+    const distance = Math.hypot(dx, dz), speed = this.movementSpeed(robot) * (this.upgrades.servo ? 1.25 : 1);
     if (distance <= .000001) return true;
     const directCompletion = distance <= speed * dt;
     const step = Math.min(speed * dt, distance);
@@ -373,7 +520,8 @@ export class SalvageSimulation {
   }
 
   positionIsClear(robot, x, z) {
-    if (NAVIGATION_OBSTACLES.some(obstacle => Math.hypot(x - obstacle.x, z - obstacle.z) < obstacle.radius)) return false;
+    if (robot.kind !== 'sky_miner' && NAVIGATION_OBSTACLES.some(obstacle => Math.hypot(x - obstacle.x, z - obstacle.z) < obstacle.radius)) return false;
+    if (robot.kind !== 'sky_miner' && this.nodes.some(node => node.remaining > 0 && Math.hypot(x - node.x, z - node.z) < .72)) return false;
     if (this.technologyEffects.sceneUnlocks?.includes('survey_beacon') && Math.hypot(x + 3.1, z - 1.9) < .4) return false;
     if (this.technologyEffects.sceneUnlocks?.includes('refinery') && Math.hypot(x - 3.2, z + 1.9) < .75) return false;
     return this.robots.every(other => other.id === robot.id || Math.hypot(x - other.x, z - other.z) >= .65);
@@ -399,8 +547,11 @@ export class SalvageSimulation {
   snapshot() {
     return {
       robots: this.robots.map(({ id, kind, x, z, phase, targetId, cargo, cargoType, status }) => ({ id, kind, x, z, phase, targetId, cargo, cargoType, status })),
-      nodes: this.nodes.map(({ id, x, z, resource, remaining, stock, scanned, respawnSeconds }) => ({ id, x, z, resource, remaining, stock, scanned, respawnSeconds })),
+      nodes: this.nodes.map(({ id, x, z, resource, remaining, stock, scanned, respawnSeconds, respawn }) => ({
+        id, x, z, resource, remaining, stock, scanned, respawnSeconds, respawnRemaining: Math.max(0, respawn || 0),
+      })),
       events: this.events.map(event => ({ ...event })),
+      drops: this.drops.map(drop => ({ ...drop })),
       seed: this.seed,
       elapsed: Number(this.elapsed.toFixed(3)),
     };

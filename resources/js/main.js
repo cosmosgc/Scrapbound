@@ -3,15 +3,22 @@ import { FactoryScene } from './factory3d.js';
 import { BattleReplay } from './battle-replay.js';
 import { createAppRouter } from './router.js';
 import { SalvageSimulation, setSimulationCatalog } from './simulation.js';
+import { addTechnologyPrerequisite, mutateCatalogArray, mutateTechnologyEffect, renderCatalogEditor, renameEffectMapKey, setCatalogPath } from './catalog-editor.js';
 import './style.css';
 import './community.css';
+import './catalog-editor.css';
 import './simulation.css';
 import './simulation-controls.css';
 import './simulation-fallback.css';
 import './scene-experience.css';
 import './technology-tree.css';
+import { FactoryProgression } from './factory-progression.js';
+import './factory-progression.css';
+import { BotInspector } from './bot-inspector.js';
+import './toy-factory.css';
 
 const economy = new Economy();
+const progression = new FactoryProgression(economy, () => render(), message => toast(message));
 let accessibilitySettings = { reducedMotion: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false, renderQuality: 'high' };
 try { accessibilitySettings = { ...accessibilitySettings, ...JSON.parse(localStorage.getItem('scrapbound.accessibility.v1') || '{}') }; } catch {}
 const scene = new FactoryScene(document.getElementById('factory-scene'), {
@@ -36,6 +43,11 @@ const simulation = new SalvageSimulation((resource, amount) => {
 simulation.syncCrew(economy.state.owned);
 simulation.setUpgrades(economy.state.bought);
 try {
+  const roles = JSON.parse(localStorage.getItem('scrapbound.role-brains.v1') || '{}');
+  for (const item of items) if (roles[item.id]) simulation.deployRole(item.id, roles[item.id]);
+} catch {}
+const inspector = new BotInspector(scene, simulation);
+try {
   const assignments = JSON.parse(localStorage.getItem('scrapbound.deployed-programs.v1') || 'null');
   const legacyProgram = JSON.parse(localStorage.getItem('scrapbound.deployed-program.v1') || 'null');
   if (assignments && typeof assignments === 'object') simulation.loadAssignments(assignments);
@@ -43,6 +55,7 @@ try {
   localStorage.setItem('scrapbound.deployed-programs.v1', JSON.stringify(simulation.assignments()));
 } catch { simulation.loadAssignments(); }
 const $ = id => document.getElementById(id);
+document.getElementById('technology-view-host')?.append(document.querySelector('.technology-panel'));
 const compact = n => Intl.NumberFormat('en', { notation: n >= 10000 ? 'compact' : 'standard', maximumFractionDigits: n >= 1000 ? 1 : 0 }).format(Math.floor(n));
 let missionBusy = false;
 let brainLoaded = false;
@@ -67,6 +80,7 @@ let authMode = 'login';
 let communityPosts = [];
 let communityCanModerate = false;
 let catalogStudioLoaded = false;
+let catalogContentState = null;
 let battleReplayScene = null;
 let battleArenaRequest = 0;
 let simulationPaused = false;
@@ -99,6 +113,14 @@ function toast(message) {
 document.addEventListener('scrapbound-toast', event => toast(event.detail));
 document.addEventListener('scrapbound-deploy-program', async event => {
   const { program, targetId } = event.detail;
+  if (typeof targetId === 'string' && targetId.startsWith('role:')) {
+    if (account) { toast('Role-wide brains are currently local-only. Select an individual bot for server programming.'); return; }
+    const kind = targetId.slice(5);
+    if (!items.some(item => item.id === kind) || !simulation.deployRole(kind, program)) return;
+    localStorage.setItem('scrapbound.role-brains.v1', JSON.stringify(simulation.rolePrograms));
+    localStorage.setItem('scrapbound.deployed-programs.v1', JSON.stringify(simulation.assignments()));
+    toast('Role brain deployed! Future bots of this role will use it too.'); render(); return;
+  }
   if (account) {
     const result = await apiRequest('robot_program', 'POST', { target: targetId === null ? 'all' : String(targetId), program });
     if (!result.ok) { toast(result.error || 'Server rejected this program.'); return; }
@@ -108,6 +130,7 @@ document.addEventListener('scrapbound-deploy-program', async event => {
     return;
   }
   const count = simulation.deploy(program, targetId);
+  localStorage.setItem('scrapbound.role-brains.v1', JSON.stringify(simulation.rolePrograms));
   if (!count) { toast('No supported program steps to deploy.'); return; }
   localStorage.setItem('scrapbound.deployed-programs.v1', JSON.stringify(simulation.assignments()));
   const target = targetId === null ? 'the crew' : `unit ${String(targetId + 1).padStart(2, '0')}`;
@@ -193,10 +216,10 @@ $('trade-create').addEventListener('click', async () => {
 
 function applyServerJobs(data) {
   playerJobs = data;
-  const owned = { scavenger: 0, scrap_hound: 0, fabricator: 0 };
+  const owned = Object.fromEntries(items.map(item => [item.id, 0]));
   const units = {};
   for (const robot of data.robots || []) {
-    if (Object.hasOwn(owned, robot.kind)) owned[robot.kind]++;
+    owned[robot.kind] = (owned[robot.kind] || 0) + 1;
     units[robot.id] = robot.program || [];
   }
   economy.state.owned = owned;
@@ -210,6 +233,7 @@ function applyServerJobs(data) {
     }
   }
   simulation.syncCrew(owned);
+  simulation.rolePrograms = {};
   simulation.loadAssignments({ crew: [], units });
   render();
 }
@@ -241,7 +265,7 @@ async function settleOfflineProgress() {
     scene.setTechnology(result.technology.effects?.sceneUnlocks || []);
   }
   if (Number.isInteger(result.world_seed) && simulation.setWorldSeed(result.world_seed)) worldSeed = result.world_seed;
-  if (result.snapshot?.nodes) simulation.applyWorldSnapshot(result.snapshot.nodes);
+  if (result.snapshot?.nodes) simulation.applyWorldSnapshot(result.snapshot.nodes, result.snapshot.drops || []);
   scene.setSimulation(simulation.snapshot());
   if (result.wallet) {
     economy.state.credits = Number(result.wallet.credits);
@@ -471,7 +495,7 @@ async function runServerSimulation() {
       return;
     }
     if (result.snapshot?.nodes) {
-      simulation.applyWorldSnapshot(result.snapshot.nodes);
+      simulation.applyWorldSnapshot(result.snapshot.nodes, result.snapshot.drops || []);
       scene.setSimulation(simulation.snapshot());
     }
     if (Array.isArray(result.payouts) && result.payouts.length) {
@@ -506,6 +530,7 @@ function showAuth(mode = 'login') {
 function updateAuthUI() {
   $('auth-button').textContent = account ? `⌁ ${account.username}` : 'Sign in';
   $('admin-catalog-nav').classList.toggle('hidden', !account?.can_manage_catalog);
+  $('admin-technology-nav').classList.toggle('hidden', !account?.can_manage_catalog);
   $('community-compose').classList.toggle('hidden', !account);
   $('community-readonly').textContent = account ? 'A shared board for friendly requests, fair trades, and cooperative plans.' : 'Sign in to post, reply, offer help, or join a collaboration. You can browse the board without an account.';
   renderCommunity();
@@ -556,16 +581,215 @@ async function loadGameCatalog() {
   render();
 }
 
+function syncCatalogJson() {
+  if (catalogContentState) $('catalog-content').value = JSON.stringify(catalogContentState, null, 2);
+}
+
+function renderAdminTechnologyGraph() {
+  const host = $('admin-tech-graph');
+  const nodes = catalogContentState?.technologyNodes || [];
+  if (!host) return;
+  if (!nodes.length) { host.innerHTML = '<div class="panel-note">Add a technology node to begin a progression graph.</div>'; return; }
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const depth = (node, seen = new Set()) => {
+    if (!node.prerequisites?.length || seen.has(node.id)) return 0;
+    seen.add(node.id);
+    return 1 + Math.max(...node.prerequisites.map(id => depth(byId.get(id) || { id }, new Set(seen))));
+  };
+  const levels = new Map();
+  for (const node of nodes) {
+    const level = depth(node);
+    if (!levels.has(level)) levels.set(level, []);
+    levels.get(level).push(node);
+  }
+  const cardWidth = 184, cardHeight = 112, gapQ = 250, gapR = 145, padding = 32;
+  const axial = new Map();
+  for (const [levelIndex, level] of levels) {
+    level.forEach((node, index) => axial.set(node.id, node.gridPosition && Number.isInteger(node.gridPosition.q) && Number.isInteger(node.gridPosition.r)
+      ? { q: node.gridPosition.q, r: node.gridPosition.r }
+      : { q: levelIndex, r: index - Math.floor((level.length - 1) / 2) }));
+  }
+  const qs = [...axial.values()].map(point => point.q), rs = [...axial.values()].map(point => point.r);
+  const minQ = Math.min(...qs), maxQ = Math.max(...qs), minR = Math.min(...rs), maxR = Math.max(...rs);
+  const positions = new Map(nodes.map(node => {
+    const point = axial.get(node.id);
+    return [node.id, { x: padding + (point.q - minQ) * gapQ + (point.r - minR) * gapQ / 2, y: padding + (point.r - minR) * gapR }];
+  }));
+  const width = padding * 2 + (maxQ - minQ + 1) * gapQ + (maxR - minR) * gapQ / 2;
+  const height = Math.max(180, padding * 2 + (maxR - minR + 1) * gapR);
+  const edges = nodes.flatMap(node => (node.prerequisites || []).flatMap(parentId => {
+    const parent = positions.get(parentId), child = positions.get(node.id);
+    if (!parent || !child) return [];
+    const fromX = parent.x + cardWidth, fromY = parent.y + cardHeight / 2;
+    const toX = child.x, toY = child.y + cardHeight / 2;
+    const curve = (fromX + toX) / 2;
+    return [`<path class="admin-tech-edge" d="M${fromX} ${fromY} C${curve} ${fromY},${curve} ${toY},${toX} ${toY}"/>`];
+  })).join('');
+  const gridCells = [];
+  for (let q = minQ - 2; q <= maxQ + 2; q++) {
+    for (let r = minR - 2; r <= maxR + 2; r++) {
+      const centerX = padding + (q - minQ) * gapQ + (r - minR) * gapQ / 2 + cardWidth / 2;
+      const centerY = padding + (r - minR) * gapR + cardHeight / 2;
+      if (centerX < -cardWidth || centerY < -cardHeight || centerX > width + cardWidth || centerY > height + cardHeight) continue;
+      const points = Array.from({ length: 6 }, (_, index) => {
+        const angle = Math.PI / 3 * index;
+        return `${(centerX + Math.cos(angle) * cardWidth / 2).toFixed(1)},${(centerY + Math.sin(angle) * cardHeight / 2).toFixed(1)}`;
+      }).join(' ');
+      gridCells.push(`<polygon class="admin-tech-grid-cell ${q === 0 && r === 0 ? 'admin-tech-grid-origin' : ''}" points="${points}"/>`);
+    }
+  }
+  const cards = nodes.map(node => {
+    const position = positions.get(node.id);
+    const parentNames = (node.prerequisites || []).map(id => byId.get(id)?.name || id);
+    return `<button type="button" draggable="true" class="admin-tech-graph-node" data-tech-focus="${safe(node.id)}" style="left:${position.x}px;top:${position.y}px"><span>${node.prerequisites?.length ? 'BRANCH NODE · DRAG TO MOVE' : 'FOUNDATION · DRAG TO MOVE'}</span><b>${safe(node.name || node.id)}</b><small>${parentNames.length ? `Requires ${safe(parentNames.join(', '))}` : 'Starting point'}</small></button>`;
+  }).join('');
+  host.innerHTML = `<div class="admin-tech-grid-hint">HONEYCOMB SNAP GRID <span>Drag a node; it snaps to the nearest cell</span></div><div class="admin-tech-graph-scroll"><div class="admin-tech-graph-canvas" style="width:${width}px;height:${height}px"><svg viewBox="0 0 ${width} ${height}" aria-hidden="true">${gridCells.join('')}${edges}</svg>${cards}</div></div>`;
+  const canvas = host.querySelector('.admin-tech-graph-canvas');
+  host.querySelectorAll('[data-tech-focus]').forEach(button => button.addEventListener('dragstart', event => {
+    event.dataTransfer.setData('text/plain', button.dataset.techFocus);
+    event.dataTransfer.effectAllowed = 'move';
+  }));
+  canvas.addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; });
+  canvas.addEventListener('drop', event => {
+    event.preventDefault();
+    const node = nodes.find(entry => entry.id === event.dataTransfer.getData('text/plain'));
+    if (!node) return;
+    const bounds = canvas.getBoundingClientRect();
+    const localX = (event.clientX - bounds.left) * canvas.offsetWidth / bounds.width - padding;
+    const localY = (event.clientY - bounds.top) * canvas.offsetHeight / bounds.height - padding;
+    const r = Math.round(localY / gapR) + minR;
+    const q = Math.round((localX - (r - minR) * gapQ / 2) / gapQ) + minQ;
+    node.gridPosition = { q: Math.max(-20, Math.min(20, q)), r: Math.max(-20, Math.min(20, r)) };
+    renderCatalogForms();
+    $('technology-message').textContent = `Moved ${node.name || node.id}. Placement is part of the draft; validate and create a draft to save it.`;
+  });
+  host.querySelectorAll('[data-tech-focus]').forEach(button => button.addEventListener('click', () => {
+    const node = nodes.find(entry => entry.id === button.dataset.techFocus);
+    const section = $('technology-structured-editor').querySelector(`[data-editor-section="technologyNodes"]`);
+    section?.open && section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const entry = [...($('technology-structured-editor').querySelectorAll('.structured-entry'))]
+      .find(element => element.querySelector('input[data-editor-path]')?.value === node?.id);
+    entry?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }));
+}
+
+function renderCatalogForms() {
+  if (!catalogContentState) return;
+  renderCatalogEditor($('catalog-structured-editor'), catalogContentState);
+  renderCatalogEditor($('technology-structured-editor'), catalogContentState, 'technologyNodes');
+  renderAdminTechnologyGraph();
+  syncCatalogJson();
+}
+
+function applyCatalogEditorChange(event) {
+  const target = event.target;
+  // Both dropdowns apply their selection immediately; process them before the
+  // normal form handler rerenders the editor and resets the select element.
+  if (target.matches('[data-effect-choice]')) {
+    if (!target.value) return;
+    const added = Boolean(mutateTechnologyEffect(
+      catalogContentState,
+      JSON.parse(target.dataset.effectPath),
+      'add-effect',
+      target.value,
+    ));
+    const messageId = target.closest('#technology-structured-editor') ? 'technology-message' : 'catalog-message';
+    renderCatalogForms();
+    $(messageId).textContent = added
+      ? 'Gameplay effect added. Configure its IDs or resource multipliers, then validate the catalog.'
+      : 'That gameplay effect is already configured or unavailable.';
+    return;
+  }
+  if (target.matches('[data-prerequisite-choice]')) {
+    if (!target.value) return;
+    const added = addTechnologyPrerequisite(
+      catalogContentState,
+      JSON.parse(target.dataset.prerequisitePath),
+      target.value,
+    );
+    renderCatalogForms();
+    $('technology-message').textContent = added
+      ? 'Prerequisite added. Validate the tree to check for missing links or cycles.'
+      : 'That prerequisite is unavailable or already selected.';
+    return;
+  }
+  let operationMessage = '';
+  if (target.matches('[data-editor-path][data-editor-type]')) {
+    const path = JSON.parse(target.dataset.editorPath);
+    const type = target.dataset.editorType;
+    let value = target.type === 'checkbox' ? target.checked : target.value;
+    if (type === 'number') value = Number(value);
+    if (type === 'map-key') {
+      renameEffectMapKey(catalogContentState, path, value.trim());
+      renderCatalogForms();
+      return;
+    }
+    if (type === 'list' || type === 'list-number') {
+      value = value.split(',').map(entry => entry.trim()).filter(Boolean);
+      if (type === 'list-number') value = value.map(Number);
+    }
+    setCatalogPath(catalogContentState, path, value);
+  }
+  const operation = target.closest('[data-editor-op]');
+  if (operation) {
+    const path = JSON.parse(operation.dataset.editorPath);
+    const op = operation.dataset.editorOp;
+    if (op === 'add-effect') {
+      const choice = operation.closest('.effect-picker')?.querySelector('[data-effect-choice]');
+      mutateTechnologyEffect(catalogContentState, path, op, choice?.value.trim());
+    } else if (op.startsWith('add-effect') || op.startsWith('remove-effect')) {
+      mutateTechnologyEffect(catalogContentState, path, op);
+    } else if (op === 'remove-prerequisite') {
+      mutateCatalogArray(catalogContentState, path, 'remove');
+    } else mutateCatalogArray(catalogContentState, path, op);
+  }
+  renderCatalogForms();
+  if (operationMessage) $('technology-message').textContent = operationMessage;
+}
+
+function catalogEditorContent() {
+  if (!catalogContentState) throw new Error('Catalog has not loaded yet.');
+  return JSON.parse(JSON.stringify(catalogContentState));
+}
+
+async function previewCatalog(target = 'catalog') {
+  if (!catalogContentState) return;
+  const content = catalogEditorContent();
+  const result = await apiRequest('catalog_preview', 'POST', { content });
+  const message = $(target === 'technology' ? 'technology-message' : 'catalog-message');
+  const output = $(target === 'technology' ? 'technology-preview-output' : 'catalog-preview-output');
+  message.textContent = result.ok ? 'Validation passed. Preview is read-only; no content was saved or published.' : result.error || 'Catalog preview rejected.';
+  output.classList.toggle('hidden', !result.ok);
+  if (result.ok) output.textContent = JSON.stringify(result.preview, null, 2);
+  return result;
+}
+
+async function createCatalogDraft(target = 'catalog') {
+  if (!catalogContentState) return;
+  const content = catalogEditorContent();
+  const result = await apiRequest('catalog_draft', 'POST', { content });
+  const message = $(target === 'technology' ? 'technology-message' : 'catalog-message');
+  message.textContent = result.ok ? `Created immutable draft version ${result.version}. Review it in Catalog Studio before publishing.` : result.error || 'Draft was rejected.';
+  if (result.ok) await loadCatalogStudio();
+}
+
 async function loadCatalogStudio() {
   const message = $('catalog-message');
   const result = await apiRequest('catalog_studio');
-  if (!result.ok) { message.textContent = result.error || 'Catalog studio access denied.'; return; }
+  if (!result.ok) {
+    message.textContent = result.error || 'Catalog studio access denied.';
+    $('technology-message').textContent = result.error || 'Technology editor access denied.';
+    for (const id of ['catalog-preview', 'catalog-create-draft', 'technology-preview', 'technology-create-draft', 'technology-add-node']) $(id).disabled = true;
+    return;
+  }
   if (!catalogStudioLoaded) {
     const { version, ...content } = result.active;
-    $('catalog-content').value = JSON.stringify(content, null, 2);
+    catalogContentState = content;
     catalogStudioLoaded = true;
+    renderCatalogForms();
   }
   message.textContent = `Active catalog version ${result.active.version}. Draft content is immutable after creation.`;
+  $('technology-message').textContent = `Editing the technology nodes inside active catalog version ${result.active.version}. Changes remain drafts until published.`;
   $('catalog-version-list').innerHTML = result.versions.length ? result.versions.map(version => `<article class="catalog-version"><div><b>VERSION ${version.version}</b><span>${safe(version.status.toUpperCase())}${version.rollback_of ? ` · ROLLBACK OF ${version.rollback_of}` : ''}</span></div><div>${version.status === 'draft' ? `<button class="button button-secondary" data-catalog-action="publish" data-version-id="${version.id}">Publish</button>` : ''}${version.status === 'published' ? `<button class="button button-secondary" data-catalog-action="disable" data-version-id="${version.id}">Disable</button>` : ''}${version.status !== 'published' ? `<button class="text-action" data-catalog-action="rollback" data-version-id="${version.id}">Rollback to this version</button>` : ''}</div></article>`).join('') : '<div class="panel-note">No persisted versions yet; active values are using the bundled defaults.</div>';
   $('catalog-version-list').querySelectorAll('[data-catalog-action]').forEach(button => button.addEventListener('click', async () => {
     const action = button.dataset.catalogAction;
@@ -579,33 +803,34 @@ async function loadCatalogStudio() {
   }));
 }
 
-function catalogEditorContent() {
+$('catalog-refresh').addEventListener('click', loadCatalogStudio);
+$('catalog-preview').addEventListener('click', () => previewCatalog('catalog'));
+$('technology-preview').addEventListener('click', () => previewCatalog('technology'));
+$('catalog-create-draft').addEventListener('click', () => createCatalogDraft('catalog'));
+$('technology-create-draft').addEventListener('click', () => createCatalogDraft('technology'));
+$('technology-add-node').addEventListener('click', () => {
+  if (!catalogContentState) return;
+  mutateCatalogArray(catalogContentState, ['technologyNodes'], 'add');
+  renderCatalogForms();
+  $('technology-message').textContent = 'New unsaved node added. Give it a unique ID and configure its prerequisites and effects.';
+});
+$('catalog-apply-json').addEventListener('click', () => {
   try {
     const content = JSON.parse($('catalog-content').value);
     if (!content || Array.isArray(content) || typeof content !== 'object') throw new Error('Catalog JSON must be an object.');
-    return content;
+    catalogContentState = content;
+    renderCatalogForms();
+    $('catalog-message').textContent = 'Advanced JSON applied to the structured editor. Validate before creating a draft.';
   } catch (error) {
     $('catalog-message').textContent = `Invalid JSON: ${error.message}`;
-    throw error;
   }
+});
+for (const host of [$('catalog-structured-editor'), $('technology-structured-editor')]) {
+  host.addEventListener('change', applyCatalogEditorChange);
+  host.addEventListener('click', event => {
+    if (event.target.closest('[data-editor-op]')) applyCatalogEditorChange(event);
+  });
 }
-
-$('catalog-refresh').addEventListener('click', loadCatalogStudio);
-$('catalog-preview').addEventListener('click', async () => {
-  let content;
-  try { content = catalogEditorContent(); } catch { return; }
-  const result = await apiRequest('catalog_preview', 'POST', { content });
-  $('catalog-message').textContent = result.ok ? 'Preview valid. Nothing has been saved or published.' : result.error || 'Preview rejected.';
-  $('catalog-preview-output').classList.toggle('hidden', !result.ok);
-  if (result.ok) $('catalog-preview-output').textContent = JSON.stringify(result.preview, null, 2);
-});
-$('catalog-create-draft').addEventListener('click', async () => {
-  let content;
-  try { content = catalogEditorContent(); } catch { return; }
-  const result = await apiRequest('catalog_draft', 'POST', { content });
-  $('catalog-message').textContent = result.ok ? `Created immutable draft version ${result.version}. Review it below before publishing.` : result.error || 'Draft was rejected.';
-  if (result.ok) await loadCatalogStudio();
-});
 function typeLabel(kind) { return ({ help: '🛠 HELP REQUEST', trade: '⇄ TRADE OFFER', collab: '🤝 COLLABORATION' })[kind] || 'COMMUNITY'; }
 function renderCommunity() {
   const feed = $('community-feed'); if (!feed) return;
@@ -701,16 +926,19 @@ function renderItems() {
   $('unit-count').textContent = `${total} / 20 UNITS`;
   $('scene-active').textContent = total;
   $('robots-owned').textContent = `${total} active unit${total === 1 ? '' : 's'}`;
-  scene.setRobots(total);
+  scene.setRobots(simulation.robots);
   $('production-list').innerHTML = items.map(item => {
     const owned = economy.state.owned[item.id] || 0, price = economy.price(item);
-    const affordable = economy.canAfford(price, item.currency) && total < 20;
-    return `<div class="production-item"><div class="item-icon" style="--item-color:${safe(item.tint)}">${safe(item.icon)}</div><div class="item-copy"><b>${safe(item.name)}</b><small>${safe(item.role)}</small></div><span class="owned-count">×${owned}</span><button class="button button-buy" data-buy-item="${item.id}" ${affordable ? '' : 'disabled'}>${price} ${item.currency === 'credits' ? '¢' : '▧'} <span>＋</span></button></div>`;
+    const locked = Boolean(item.unlockNode && !technologyState?.effects?.unlockBotKinds?.includes(item.id));
+    const affordable = economy.canAfford(price, item.currency) && total < 20 && !locked;
+    const label = locked ? 'RESEARCH TO UNLOCK' : `${price} ${item.currency === 'credits' ? '¢' : '▧'} ＋`;
+    return `<div class="production-item ${locked ? 'production-locked' : ''}"><div class="item-icon" style="--item-color:${safe(item.tint)}">${safe(item.icon)}</div><div class="item-copy"><b>${safe(item.name)}</b><small>${safe(item.role)}${locked ? ` · Requires ${safe(item.unlockNode.replaceAll('_', ' '))}` : ''}</small></div><span class="owned-count">×${owned}</span><button class="button button-buy" data-buy-item="${item.id}" ${affordable ? '' : 'disabled'}>${label}</button></div>`;
   }).join('');
   $('fullscreen-shop').innerHTML = `<div class="scene-quickshop-title">ASSEMBLE · ${total}/20 UNITS</div>${items.map(item => {
     const owned = economy.state.owned[item.id] || 0, price = economy.price(item);
-    const affordable = economy.canAfford(price, item.currency) && total < 20;
-    return `<button class="scene-buy-button" data-buy-item="${item.id}" ${affordable ? '' : 'disabled'}><span>${safe(item.icon)}</span><b>${safe(item.name)}</b><small>×${owned} · ${price} ${item.currency === 'credits' ? '¢' : '▧'}</small></button>`;
+    const locked = Boolean(item.unlockNode && !technologyState?.effects?.unlockBotKinds?.includes(item.id));
+    const affordable = economy.canAfford(price, item.currency) && total < 20 && !locked;
+    return `<button class="scene-buy-button" data-buy-item="${item.id}" ${affordable ? '' : 'disabled'}><span>${safe(item.icon)}</span><b>${safe(item.name)}</b><small>${locked ? 'RESEARCH TO UNLOCK' : `×${owned} · ${price} ${item.currency === 'credits' ? '¢' : '▧'}`}</small></button>`;
   }).join('')}`;
   document.querySelectorAll('[data-buy-item]').forEach(button => button.addEventListener('click', () => {
     const item = items.find(entry => entry.id === button.dataset.buyItem);
@@ -748,17 +976,98 @@ function renderTechnologyTree() {
     return;
   }
   const nodes = technologyState.nodes || [];
-  host.innerHTML = nodes.length ? nodes.map(node => {
+  if (!nodes.length) {
+    host.innerHTML = '<div class="panel-note">No technology nodes are published yet.</div>';
+    return;
+  }
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const depthFor = (node, visiting = new Set()) => {
+    if (!node.prerequisites?.length) return 0;
+    if (visiting.has(node.id)) return 0;
+    visiting.add(node.id);
+    return 1 + Math.max(...node.prerequisites.map(id => depthFor(byId.get(id) || { id, prerequisites: [] }, new Set(visiting))));
+  };
+  const sortedNodes = [...nodes].sort((a, b) => depthFor(a) - depthFor(b) || nodes.indexOf(a) - nodes.indexOf(b));
+  const axialDistance = (a, b) => Math.max(Math.abs(a.q - b.q), Math.abs(a.r - b.r), Math.abs(a.q + a.r - b.q - b.r));
+  const axialRing = radius => {
+    const points = [];
+    for (let q = -radius; q <= radius; q++) {
+      for (let r = -radius; r <= radius; r++) {
+        if (Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) === radius) points.push({ q, r });
+      }
+    }
+    return points.sort((a, b) => Math.atan2(a.r * 1.5, (a.q + a.r / 2) * Math.sqrt(3)) - Math.atan2(b.r * 1.5, (b.q + b.r / 2) * Math.sqrt(3)));
+  };
+  const axialPositions = new Map(), occupied = new Set();
+  for (const node of sortedNodes) {
+    if (!Number.isInteger(node.gridPosition?.q) || !Number.isInteger(node.gridPosition?.r)) continue;
+    const point = { q: node.gridPosition.q, r: node.gridPosition.r };
+    axialPositions.set(node.id, point);
+    occupied.add(`${point.q},${point.r}`);
+  }
+  for (const node of sortedNodes) {
+    if (axialPositions.has(node.id)) continue;
+    const depth = depthFor(node);
+    const parents = (node.prerequisites || []).map(id => axialPositions.get(id)).filter(Boolean);
+    if (depth === 0 && !occupied.has('0,0')) {
+      axialPositions.set(node.id, { q: 0, r: 0 });
+      occupied.add('0,0');
+      continue;
+    }
+    const candidates = axialRing(Math.max(1, depth)).filter(point => !occupied.has(`${point.q},${point.r}`)
+      && (!parents.length || parents.some(parent => axialDistance(point, parent) === 1)));
+    const fallback = axialRing(Math.max(1, depth)).filter(point => !occupied.has(`${point.q},${point.r}`));
+    const point = candidates[0] || fallback[0] || { q: depth, r: sortedNodes.indexOf(node) };
+    axialPositions.set(node.id, point);
+    occupied.add(`${point.q},${point.r}`);
+  }
+  const hexSize = 100, hexWidth = Math.sqrt(3) * hexSize, hexHeight = 2 * hexSize, mapMargin = 160;
+  const raw = new Map(sortedNodes.map(node => {
+    const point = axialPositions.get(node.id);
+    return [node.id, { x: hexSize * Math.sqrt(3) * (point.q + point.r / 2), y: hexSize * 1.5 * point.r }];
+  }));
+  const xs = [...raw.values()].map(point => point.x), ys = [...raw.values()].map(point => point.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const width = maxX - minX + hexWidth + mapMargin * 2;
+  const height = maxY - minY + hexHeight + mapMargin * 2;
+  const positions = new Map(sortedNodes.map(node => {
+    const point = raw.get(node.id);
+    return [node.id, { x: mapMargin + hexWidth / 2 + point.x - minX, y: mapMargin + hexHeight / 2 + point.y - minY }];
+  }));
+  const connectorDistance = vector => {
+    const length = Math.hypot(vector.x, vector.y) || 1;
+    const ux = Math.abs(vector.x / length), uy = Math.abs(vector.y / length);
+    return Math.min((hexWidth / 2) / (ux || Number.EPSILON), (hexHeight / 2) / (uy || Number.EPSILON), hexWidth / (ux + Math.sqrt(3) * uy));
+  };
+  const connections = nodes.flatMap(node => (node.prerequisites || []).flatMap(prerequisiteId => {
+    const from = positions.get(prerequisiteId), to = positions.get(node.id);
+    if (!from || !to) return [];
+    const direction = { x: to.x - from.x, y: to.y - from.y };
+    const startOffset = connectorDistance(direction), endOffset = connectorDistance(direction);
+    const length = Math.hypot(direction.x, direction.y) || 1;
+    const startX = from.x + direction.x / length * startOffset;
+    const startY = from.y + direction.y / length * startOffset;
+    const endX = to.x - direction.x / length * endOffset;
+    const endY = to.y - direction.y / length * endOffset;
+    const active = node.owned || node.available;
+    return [`<path class="technology-link ${active ? 'technology-link-active' : ''}" d="M ${startX} ${startY} L ${endX} ${endY}"/>`];
+  })).join('');
+  const nodeCards = nodes.map(node => {
     const effects = node.effects || {};
-    const unlocks = [...(effects.unlockResources || []).map(id => `Unlocks ${id}`), ...(effects.unlockZones || []).map(id => `Opens ${id} zone`), ...(effects.sceneUnlocks || []).map(id => `Builds ${id.replaceAll('_', ' ')}`),
+    const unlocks = [...(effects.unlockResources || []).map(id => `Unlocks ${id}`), ...(effects.unlockZones || []).map(id => `Opens ${id} zone`), ...(effects.unlockCapabilities || []).map(id => `Enables ${id.replaceAll('_', ' ')}`), ...(effects.unlockPrograms || []).map(id => `Unlocks ${id.replaceAll('_', ' ')} program`), ...(effects.unlockModules || []).map(id => `Unlocks ${id.replaceAll('_', ' ')} module`), ...(effects.unlockBotKinds || []).map(id => `Unlocks ${id.replaceAll('_', ' ')} bot`), ...(effects.sceneUnlocks || []).map(id => `Builds ${id.replaceAll('_', ' ')}`),
       ...Object.entries(effects.spawnWeightMultipliers || {}).map(([id, multiplier]) => `${id} spawn ×${multiplier}`),
       ...Object.entries(effects.deliveryValueMultipliers || {}).map(([id, multiplier]) => `${id} value ×${multiplier}`),
       ...Object.entries(effects.stockMultipliers || {}).map(([id, multiplier]) => `${id} stock ×${multiplier}`),
       ...Object.entries(effects.respawnTimeMultipliers || {}).map(([id, multiplier]) => `${id} restock time ×${multiplier}`)];
     const prereqs = node.prerequisites?.length ? `Requires ${node.prerequisites.join(', ')}` : 'Foundation node';
     const affordable = (economy.state[node.currency] || 0) >= node.cost;
-    return `<article class="technology-node ${node.owned ? 'technology-owned' : ''}"><div class="eyebrow">${node.owned ? 'RESEARCH COMPLETE' : node.available ? 'AVAILABLE RESEARCH' : 'LOCKED NODE'}</div><h3>${safe(node.name)}</h3><p>${safe(node.description)}</p><div class="technology-node-meta"><span>${safe(prereqs)}</span>${unlocks.map(effect => `<span>${safe(effect)}</span>`).join('')}</div>${node.owned ? '<span class="subtle">UNLOCKED</span>' : `<button class="button button-upgrade" data-tech-purchase="${safe(node.id)}" ${!node.available || !affordable ? 'disabled' : ''}>Research · ${node.cost} ${node.currency === 'credits' ? '¢' : '▧'}</button>`}</article>`;
-  }).join('') : '<div class="panel-note">No technology nodes are published yet.</div>';
+    const position = positions.get(node.id);
+    const status = node.owned ? 'RESEARCHED' : node.available ? affordable ? 'READY TO RESEARCH' : 'NEED MORE RESOURCES' : 'LOCKED';
+    const glyph = ({ prospecting: '⌕', refinery: '⚒', deep_veins: '◈', sorting_rig: '✧' })[node.id] || '⬡';
+    const tooltipId = `technology-tip-${safe(node.id)}`;
+    return `<article class="technology-node ${node.owned ? 'technology-owned' : ''} ${node.available ? 'technology-available' : ''}" data-tech-node="${safe(node.id)}" tabindex="0" aria-describedby="${tooltipId}" style="left:${position.x - hexWidth / 2}px;top:${position.y - hexHeight / 2}px"><button class="technology-hex" data-tech-purchase="${safe(node.id)}" aria-label="${safe(node.name)}: ${status}" ${!node.available || node.owned || !affordable ? 'disabled' : ''}><span class="technology-glyph">${glyph}</span><strong>${safe(node.name)}</strong><small>${status}</small><span class="technology-hex-cost">${node.owned ? '✓ COMPLETE' : `${node.cost} ${node.currency === 'credits' ? '¢' : '▧'}`}</span></button><div class="technology-tooltip" id="${tooltipId}" role="tooltip"><b>${safe(node.name)}</b><p>${safe(node.description)}</p><small>${safe(prereqs)}</small>${unlocks.length ? `<ul>${unlocks.map(effect => `<li>${safe(effect)}</li>`).join('')}</ul>` : ''}<span class="technology-tooltip-cost">${node.owned ? 'Already researched' : `${node.cost} ${node.currency === 'credits' ? 'credits' : 'scrap'}${!node.available ? ' · unlock prerequisite first' : !affordable ? ' · insufficient resources' : ' · select node to research'}`}</span></div></article>`;
+  }).join('');
+  host.innerHTML = `<div class="technology-legend"><span><i class="technology-legend-dot owned"></i> Researched</span><span><i class="technology-legend-dot available"></i> Available</span><span><i class="technology-legend-dot locked"></i> Locked by prerequisites</span><span class="subtle">Hover or focus a node for details</span></div><div class="technology-map-scroll"><div class="technology-map technology-honeycomb" style="width:${width}px;height:${height}px"><svg class="technology-connections" viewBox="0 0 ${width} ${height}" aria-hidden="true">${connections}</svg>${nodeCards}</div></div>`;
   host.querySelectorAll('[data-tech-purchase]').forEach(button => button.addEventListener('click', async () => {
     if (!account || button.disabled) return;
     button.disabled = true;
@@ -887,6 +1196,8 @@ function render() {
   updateProgramTargets();
   const snapshot = simulation.snapshot();
   scene.setSimulation(snapshot);
+  progression.render(snapshot, account);
+  inspector.render(snapshot);
   $('scene-credits').textContent = compact(displayValues.credits);
   $('scene-scrap').textContent = compact(displayValues.scrap);
   $('scene-crew-status').innerHTML = snapshot.robots.length
@@ -921,8 +1232,8 @@ function updateProgramTargets() {
   const signature = robots.map(robot => `${robot.id}:${robot.kind}`).join('|');
   if (select.dataset.crewSignature !== signature) {
     const selected = select.value;
-    const labels = { scavenger: 'Scavenger bot', scrap_hound: 'Scrap hound', fabricator: 'Auto-fabricator' };
-    select.innerHTML = `<option value="all">Entire crew (${robots.length})</option>${robots.map(robot => `<option value="unit:${robot.id}">Unit ${String(robot.id + 1).padStart(2, '0')} · ${labels[robot.kind]}</option>`).join('')}`;
+    const labels = Object.fromEntries(items.map(item => [item.id, item.name]));
+    select.innerHTML = `<option value="all">Entire crew (${robots.length})</option>${items.map(item => `<option value="role:${item.id}">${safe(item.name)} role · local</option>`).join('')}${robots.map(robot => `<option value="unit:${robot.id}">Unit ${String(robot.id + 1).padStart(2, '0')} · ${labels[robot.kind]}</option>`).join('')}`;
     if ([...select.options].some(option => option.value === selected)) select.value = selected;
     select.dataset.crewSignature = signature;
   }
@@ -961,12 +1272,13 @@ function activateRoute(name) {
     battleReplayScene = null;
   }
   document.querySelectorAll('.nav-link').forEach(link => {
-    const active = link.dataset.route === `/${name}`;
+    const routePaths = { 'admin-catalog': '/admin/catalog', 'admin-technology': '/admin/technology' };
+    const active = link.dataset.route === (routePaths[name] || `/${name}`);
     link.classList.toggle('active', active);
     if (active) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
   });
   document.querySelectorAll('.view').forEach(view => view.classList.toggle('active', view.id === `view-${name}`));
-  const titles = { factory: 'Factory floor', brains: 'Brain lab', expeditions: 'Expeditions', community: 'Community board', 'admin-catalog': 'Catalog studio', 'not-found': 'Sector not found' };
+  const titles = { factory: 'Factory floor', brains: 'Brain lab', technology: 'Technology tree', expeditions: 'Expeditions', community: 'Community board', 'admin-catalog': 'Catalog studio', 'admin-technology': 'Technology graph editor', 'not-found': 'Sector not found' };
   $('page-title').textContent = titles[name] || titles['not-found'];
   if (name === 'brains' && !brainLoaded) {
     import('./brains.js').then(module => { module.createBrainWorkshop(); brainLoaded = true; })
@@ -974,14 +1286,14 @@ function activateRoute(name) {
   }
   if (name === 'community') loadCommunity();
   if (name === 'expeditions') loadBattleArena();
-  if (name === 'admin-catalog') loadCatalogStudio();
+  if (name === 'admin-catalog' || name === 'admin-technology') loadCatalogStudio();
   if (name === 'brains') window.setTimeout(() => window.dispatchEvent(new Event('resize')), 60);
 }
 
 const router = createAppRouter(activateRoute);
 document.addEventListener('keydown', event => {
   if (event.target.matches('input,textarea')) return;
-  if (event.key === '1') router.navigate('/factory'); if (event.key === '2') router.navigate('/brains'); if (event.key === '3') router.navigate('/expeditions'); if (event.key === '4') router.navigate('/community');
+  if (event.key === '1') router.navigate('/factory'); if (event.key === '2') router.navigate('/brains'); if (event.key === '3') router.navigate('/technology'); if (event.key === '4') router.navigate('/expeditions'); if (event.key === '5') router.navigate('/community');
 });
 $('camera-button').addEventListener('click', () => scene.resetCamera());
 $('render-quality').value = accessibilitySettings.renderQuality;

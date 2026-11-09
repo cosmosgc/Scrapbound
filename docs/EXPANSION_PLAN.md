@@ -1,16 +1,16 @@
 # Scrapbound Expansion Plan
 
-> **Status:** The larger-world foundation is in progress: the simulation now uses a larger bounded field, seeded varied salvage sites, and a central delivery point. Remaining implementation phases below are proposed; see [DEVELOPMENT_QUEUE.md](DEVELOPMENT_QUEUE.md) for active work.
+> **Status (2026-11-09):** The larger-world foundation is implemented, including the central depot, a 136-block voxel field, automatic miner/hauler roles, separate resource drops, target reservations, countdowns, technology unlocks, Catalog Studio editing, and obstacle-aware local steering. See [VOXEL_MINING.md](VOXEL_MINING.md) for current behavior. Remaining items below are future expansion proposals; see [DEVELOPMENT_QUEUE.md](DEVELOPMENT_QUEUE.md) for completed implementation work.
 
 ## Product goal
 
-Grow the compact workshop into a larger, readable salvage field. Robots leave a central storage hub to work resource sites that appear at varied locations, avoid one another while navigating, and return to the hub before any delivered currency is awarded. Players expand their operation through a branching technology tree. Admins can safely tune the tree, bots, resources, and battle content. PvE and PvP encounters become watchable Three.js simulations driven by trusted server results.
+Continue expanding the readable voxel mining field. The current block-cell geometry is fixed for a seed; resource assignment and stock are deterministic from the seed and catalog/progression snapshot. Robots leave the central depot, avoid one another and live ground blocks, and return cargo before online currency is awarded. Players expand through technology; admins tune versioned content. Future work includes broader terrain/zone variation and more advanced pathfinding/congestion handling.
 
 ## Target player loop
 
-1. Scout a large salvage field and inspect resource sites randomly assigned to valid grid cells in each seeded world.
-2. Assign bots jobs and work programs; bots travel around obstacles and one another to collect bounded cargo while the operation continues between visits.
-3. Return cargo to the central storage depot. Only a completed depot delivery settles credits or other currencies, including bounded offline catch-up.
+1. Scout the voxel field and inspect seeded resource types/stock distributed across its fixed grid cells.
+2. Buy specialized automatic bots or deploy custom programs; miners break blocks and haulers retrieve the resulting drops while steering around blocks and one another.
+3. Return cargo to the central storage depot. Only completed depot delivery settles credits or other currencies, including bounded offline catch-up.
 4. Spend delivered resources on technology nodes that unlock multiple things: bot models, modules, resource zones, capacities, programs, and later branches.
 5. Configure the newly unlocked operation, then watch its throughput, improve bottlenecks, and expand the idle production ceiling.
 6. Enter PvE or PvP battles and watch a Three.js presentation of the server-resolved encounter, with replay controls.

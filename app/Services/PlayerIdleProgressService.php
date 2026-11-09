@@ -38,13 +38,13 @@ class PlayerIdleProgressService
             $ticks = min($maxTicks, $creditedSeconds * $ticksPerSecond);
 
             $jobState = $this->jobs->jobs($user);
-            $crew = ['scavenger' => 0, 'scrap_hound' => 0, 'fabricator' => 0];
+            $activeCatalog = $this->catalog->active();
+            $crew = array_fill_keys(array_column($activeCatalog['items'], 'id'), 0);
             $units = [];
             foreach ($jobState['robots'] as $robot) {
-                $crew[$robot['kind']]++;
+                if (array_key_exists($robot['kind'], $crew)) $crew[$robot['kind']]++;
                 $units[(int) $robot['id']] = $robot['program'];
             }
-            $activeCatalog = $this->catalog->active();
             $resolved = $this->resolver->resolve(
                 $crew,
                 ['crew' => [], 'units' => $units],
@@ -97,7 +97,7 @@ class PlayerIdleProgressService
                 'ticks' => $ticks,
                 'payouts' => array_values($groups),
                 'technology' => $this->technology->overview($user),
-                'snapshot' => ['robots' => $resolved['robots'], 'nodes' => $resolved['nodes']],
+                'snapshot' => ['robots' => $resolved['robots'], 'nodes' => $resolved['nodes'], 'drops' => $resolved['drops']],
                 'wallet' => ['credits' => $wallet->credits, 'scrap' => $wallet->scrap],
                 'settled_at' => $now->toIso8601String(),
             ];

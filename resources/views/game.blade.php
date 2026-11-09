@@ -15,9 +15,11 @@
         <nav class="nav-list">
           <a class="nav-link active" href="/factory" data-route="/factory" aria-current="page"><span>▦</span> Factory <kbd>1</kbd></a>
           <a class="nav-link" href="/brains" data-route="/brains"><span>⌘</span> Brain lab <kbd>2</kbd></a>
-          <a class="nav-link" href="/expeditions" data-route="/expeditions"><span>↗</span> Expeditions <kbd>3</kbd></a>
-          <a class="nav-link" href="/community" data-route="/community"><span>◎</span> Community <kbd>4</kbd></a>
+          <a class="nav-link" href="/technology" data-route="/technology"><span>⬡</span> Tech tree <kbd>3</kbd></a>
+          <a class="nav-link" href="/expeditions" data-route="/expeditions"><span>↗</span> Expeditions <kbd>4</kbd></a>
+          <a class="nav-link" href="/community" data-route="/community"><span>◎</span> Community <kbd>5</kbd></a>
           <a class="nav-link hidden" id="admin-catalog-nav" href="/admin/catalog" data-route="/admin/catalog"><span>⚙</span> Catalog studio</a>
+          <a class="nav-link hidden" id="admin-technology-nav" href="/admin/technology" data-route="/admin/technology"><span>⬡</span> Tech editor</a>
         </nav>
         <div class="sidebar-bottom"><div class="online-dot"></div><span>LOCAL SIMULATION</span><small>SYNC: BROWSER SAVE</small></div>
       </aside>
@@ -51,11 +53,17 @@
           <div id="community-feed" class="community-feed"><div class="panel community-notice">Connect to the server to load community posts.</div></div>
         </section>
         <section class="view" id="view-admin-catalog">
-          <div class="expedition-header"><div><div class="eyebrow">ADMINISTRATION</div><h2>Catalog studio</h2><p>Preview, version, publish, disable, and restore trusted game catalog data.</p></div><div class="community-online">ADMIN ONLY</div></div>
-          <article class="panel catalog-editor"><div class="panel-heading"><div><div class="eyebrow">DRAFT CONTENT</div><h2>Validated JSON</h2></div><div class="catalog-editor-actions"><button class="button button-secondary" id="catalog-preview">Preview</button><button class="button button-primary" id="catalog-create-draft">Create immutable draft</button></div></div><textarea id="catalog-content" spellcheck="false" aria-label="Catalog JSON"></textarea><div id="catalog-message" class="panel-note">Only administrators can access catalog editing.</div><pre id="catalog-preview-output" class="hidden"></pre></article>
+          <div class="expedition-header"><div><div class="eyebrow">ADMINISTRATION</div><h2>Catalog studio</h2><p>Edit game content through structured forms, validate a preview, then create an immutable version.</p></div><div class="community-online">ADMIN ONLY</div></div>
+          <article class="panel catalog-editor"><div class="panel-heading"><div><div class="eyebrow">STRUCTURED CONTENT</div><h2>Catalog editor</h2></div><div class="catalog-editor-actions"><button class="button button-secondary" id="catalog-preview">Validate preview</button><button class="button button-primary" id="catalog-create-draft">Create immutable draft</button></div></div><div id="catalog-structured-editor" class="structured-catalog-editor"></div><details class="catalog-advanced"><summary>Advanced JSON editor</summary><textarea id="catalog-content" spellcheck="false" aria-label="Advanced catalog JSON"></textarea><button class="button button-secondary" id="catalog-apply-json">Apply JSON to structured editor</button></details><div id="catalog-message" class="panel-note">Only administrators can access catalog editing.</div><pre id="catalog-preview-output" class="hidden"></pre></article>
           <section class="panel catalog-versions"><div class="panel-heading"><div><div class="eyebrow">VERSION HISTORY</div><h2>Catalog versions</h2></div><button class="button button-secondary" id="catalog-refresh">Refresh</button></div><div id="catalog-version-list"></div></section>
         </section>
+        <section class="view" id="view-admin-technology">
+          <div class="expedition-header"><div><div class="eyebrow">ADMINISTRATION · RESEARCH SYSTEMS</div><h2>Technology graph editor</h2><p>Add nodes, connect prerequisites, and configure allowlisted gameplay unlocks. Preview and publish through the same immutable catalog workflow.</p></div><div class="community-online">ADMIN ONLY</div></div>
+          <article class="panel admin-tech-graph-panel"><div class="panel-heading"><div><div class="eyebrow">BRANCH PREVIEW</div><h2>Unlock structure</h2></div><a class="button button-secondary" href="/admin/catalog" data-route="/admin/catalog">All catalog sections →</a></div><div id="admin-tech-graph" class="admin-tech-graph"></div></article>
+          <article class="panel catalog-editor admin-tech-editor"><div class="panel-heading"><div><div class="eyebrow">NODE DEFINITIONS</div><h2>Technology nodes</h2></div><div class="catalog-editor-actions"><button class="button button-secondary" id="technology-add-node">＋ Add node</button><button class="button button-secondary" id="technology-preview">Validate tree</button><button class="button button-primary" id="technology-create-draft">Create immutable draft</button></div></div><div id="technology-structured-editor" class="structured-catalog-editor"></div><div id="technology-message" class="panel-note">Only administrators can edit technology.</div><pre id="technology-preview-output" class="hidden"></pre></article>
+        </section>
         <section class="view" id="view-not-found"><article class="panel not-found"><div class="eyebrow">404 · SIGNAL LOST</div><h2>This sector isn't mapped.</h2><p>That route doesn't lead anywhere. Head back to a known part of the workshop.</p><a class="button button-primary" href="/factory" data-route="/factory">Return to factory <span>→</span></a></article></section>
+        <section class="view" id="view-technology"><div class="expedition-header technology-view-header"><div><div class="eyebrow">RESEARCH & DEVELOPMENT</div><h2>Technology tree</h2><p>Choose a branch, unlock new field capabilities, and grow your operation.</p></div><div class="community-online">PERSISTENT RESEARCH</div></div><div id="technology-view-host"></div></section>
         <footer class="footer"><span>SCRAPBOUND <b>PROTOTYPE 0.1</b></span><span>Built for the long haul <span class="footer-star">✳</span></span></footer>
       </main>
     </div>

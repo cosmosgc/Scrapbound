@@ -8,6 +8,10 @@ return [
         ['id' => 'scavenger', 'name' => 'Scavenger bot', 'role' => 'General-purpose salvage runner', 'icon' => '⌕', 'cost' => 55, 'currency' => 'credits', 'tint' => '#a4d66d', 'priceGrowth' => 1.17],
         ['id' => 'scrap_hound', 'name' => 'Scrap hound', 'role' => 'Quick salvage specialist', 'icon' => '▧', 'cost' => 35, 'currency' => 'credits', 'tint' => '#e7a34f', 'priceGrowth' => 1.17],
         ['id' => 'fabricator', 'name' => 'Auto-fabricator', 'role' => 'Heavy-duty collection unit', 'icon' => '⚒', 'cost' => 110, 'currency' => 'scrap', 'tint' => '#78b7c9', 'priceGrowth' => 1.17],
+        ['id' => 'sky_miner', 'name' => 'Skydrill', 'role' => 'Fast flying block miner; digs slowly and ignores ground obstacles.', 'icon' => '✦', 'cost' => 180, 'currency' => 'credits', 'tint' => '#8ad8df', 'priceGrowth' => 1.2, 'unlockNode' => 'aerial_mining'],
+        ['id' => 'block_miner', 'name' => 'Quarry borer', 'role' => 'Dedicated block miner; breaks blocks quickly but cannot haul drops.', 'icon' => '⛏', 'cost' => 140, 'currency' => 'scrap', 'tint' => '#d69d65', 'priceGrowth' => 1.2, 'unlockNode' => 'quarry_boring'],
+        ['id' => 'cargo_hauler', 'name' => 'Cargo mule', 'role' => 'Moves mined resource drops to the depot; cannot mine blocks.', 'icon' => '▰', 'cost' => 160, 'currency' => 'credits', 'tint' => '#a9c875', 'priceGrowth' => 1.2, 'unlockNode' => 'haul_network'],
+        ['id' => 'buffer_bot', 'name' => 'Field buffer', 'role' => 'Supports nearby bots with a work-speed boost.', 'icon' => '◉', 'cost' => 220, 'currency' => 'scrap', 'tint' => '#b4a0dc', 'priceGrowth' => 1.2, 'unlockNode' => 'field_support'],
     ],
     'upgrades' => [
         ['id' => 'servo', 'name' => 'Servo tuning', 'description' => 'Robot movement and collection speed +25%.', 'cost' => 120, 'currency' => 'credits', 'icon' => '↗'],
@@ -15,13 +19,19 @@ return [
         ['id' => 'routing', 'name' => 'Smart routing', 'description' => 'Credits from expeditions +35%.', 'cost' => 200, 'currency' => 'credits', 'icon' => '⌘'],
     ],
     'resources' => [
-        ['id' => 'credits', 'name' => 'Credit cache', 'icon' => '¢', 'currency' => 'credits', 'valuePerCargo' => 5, 'spawnWeight' => 1, 'minStock' => 4, 'maxStock' => 6, 'respawnSeconds' => 5, 'zone' => 'frontier'],
-        ['id' => 'scrap', 'name' => 'Scrap pile', 'icon' => '▧', 'currency' => 'scrap', 'valuePerCargo' => 2, 'spawnWeight' => 1, 'minStock' => 5, 'maxStock' => 7, 'respawnSeconds' => 5, 'zone' => 'frontier'],
-        ['id' => 'alloy', 'name' => 'Refined alloy', 'icon' => '⬡', 'currency' => 'credits', 'valuePerCargo' => 18, 'spawnWeight' => .5, 'minStock' => 2, 'maxStock' => 4, 'respawnSeconds' => 5, 'zone' => 'quarry', 'unlockNode' => 'prospecting'],
+        ['id' => 'credits', 'name' => 'Credit cache', 'icon' => '¢', 'currency' => 'credits', 'valuePerCargo' => 5, 'spawnWeight' => 1, 'minStock' => 4, 'maxStock' => 6, 'respawnSeconds' => 60, 'zone' => 'frontier'],
+        ['id' => 'scrap', 'name' => 'Scrap pile', 'icon' => '▧', 'currency' => 'scrap', 'valuePerCargo' => 2, 'spawnWeight' => 1, 'minStock' => 5, 'maxStock' => 7, 'respawnSeconds' => 60, 'zone' => 'frontier'],
+        ['id' => 'alloy', 'name' => 'Refined alloy', 'icon' => '⬡', 'currency' => 'credits', 'valuePerCargo' => 18, 'spawnWeight' => .5, 'minStock' => 2, 'maxStock' => 4, 'respawnSeconds' => 60, 'zone' => 'quarry', 'unlockNode' => 'prospecting'],
     ],
     'technologyNodes' => [
         ['id' => 'prospecting', 'name' => 'Geological survey', 'description' => 'Open the quarry zone, unlock alloy deposits, increase their spawn weight, and build a survey beacon.', 'cost' => 90, 'currency' => 'credits', 'prerequisites' => [], 'effects' => ['unlockResources' => ['alloy'], 'unlockZones' => ['quarry'], 'spawnWeightMultipliers' => ['alloy' => 2], 'sceneUnlocks' => ['survey_beacon']]],
         ['id' => 'refinery', 'name' => 'Field refinery', 'description' => 'Build a refinery, increase alloy value and site stock, and shorten its restock cycle.', 'cost' => 12, 'currency' => 'scrap', 'prerequisites' => ['prospecting'], 'effects' => ['deliveryValueMultipliers' => ['alloy' => 1.5], 'stockMultipliers' => ['alloy' => 1.5], 'respawnTimeMultipliers' => ['alloy' => .5], 'sceneUnlocks' => ['refinery']]],
+        ['id' => 'deep_veins', 'name' => 'Deep veins', 'description' => 'Improve the chance of finding alloy deposits across the quarry.', 'cost' => 120, 'currency' => 'credits', 'prerequisites' => ['prospecting'], 'effects' => ['spawnWeightMultipliers' => ['alloy' => 1.5]]],
+        ['id' => 'sorting_rig', 'name' => 'Sorting rig', 'description' => 'Recover more value from each delivered alloy load.', 'cost' => 18, 'currency' => 'scrap', 'prerequisites' => ['prospecting'], 'effects' => ['deliveryValueMultipliers' => ['alloy' => 1.25]]],
+        ['id' => 'quarry_boring', 'name' => 'Quarry boring', 'description' => 'Unlock a dedicated ground miner for breaking resource blocks.', 'cost' => 100, 'currency' => 'credits', 'prerequisites' => ['prospecting'], 'effects' => ['unlockBotKinds' => ['block_miner']]],
+        ['id' => 'aerial_mining', 'name' => 'Aerial extraction', 'description' => 'Unlock the fast flying Skydrill. Its flight is quick, but its small drill extracts slowly.', 'cost' => 160, 'currency' => 'credits', 'prerequisites' => ['quarry_boring'], 'effects' => ['unlockBotKinds' => ['sky_miner']]],
+        ['id' => 'haul_network', 'name' => 'Haul network', 'description' => 'Unlock a dedicated logistics bot that collects mined drops and delivers them to the depot.', 'cost' => 14, 'currency' => 'scrap', 'prerequisites' => ['quarry_boring'], 'effects' => ['unlockBotKinds' => ['cargo_hauler']]],
+        ['id' => 'field_support', 'name' => 'Field support array', 'description' => 'Unlock support bots that boost nearby miners and haulers.', 'cost' => 24, 'currency' => 'scrap', 'prerequisites' => ['haul_network', 'aerial_mining'], 'effects' => ['unlockBotKinds' => ['buffer_bot']]],
     ],
     'rewards' => [
         'creditsPerCargo' => 5,

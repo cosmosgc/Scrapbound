@@ -1,10 +1,10 @@
 # Robot Factory — Game Plan
 
-> **Implementation status (2026-11-08):** Scrapbound is a Laravel 13 application (Blade routes, Laravel sessions/auth, Eloquent and migrations) with a Vite-built vanilla JavaScript/Three.js/Blockly client. Local playtest saves remain available to guests. Signed-in progression uses MySQL-backed wallets, robot jobs/programs, delivery-only server simulation, timed PvE missions, shared cooperative salvage jobs, NPC arena battles using saved PvP builds, server-owned item inventory with escrow trades, a seeded multi-zone field, persistent technology, and bounded offline settlement. Deterministic multi-bot spacing and static obstacle-aware routing are implemented; advanced grid pathfinding and congestion behavior remain future work.
+> **Implementation status (2026-11-09):** Scrapbound is a Laravel 13 application (Blade routes, Laravel sessions/auth, Eloquent and migrations) with a Vite-built vanilla JavaScript/Three.js/Blockly client. Guest saves remain browser-local. Signed-in progression uses server-owned wallets/jobs, delivery-settled online simulation, timed PvE, co-op salvage, NPC arena battles, escrow trades, persistent technology, and bounded offline settlement. The mining field now contains 136 solid voxel blocks; bots break blocks into pickups, reserve targets exclusively, and use role-specific automatic behavior and models. PHP/JS steering avoids live blocks and static props; global pathfinding/congestion optimization remains future work. See [VOXEL_MINING.md](VOXEL_MINING.md) for the current field and role rules.
 
 > **Social direction:** accounts and a shared community board support asking for help, proposing negotiation posts, and recruiting collaborators. Targeted item-for-credit trades now use server-owned inventory, reserved escrow, atomic wallet settlement, and audit events.
 
-> **Expansion direction:** the next larger-world vision is documented in [EXPANSION_PLAN.md](EXPANSION_PLAN.md): a bigger seeded salvage field with a central delivery depot, deterministic bot collision avoidance, a multi-unlock technology tree, expanded admin content controls, and watchable Three.js PvE/PvP battles. This is proposed design, not current implementation status.
+> **Expansion direction:** see [EXPANSION_PLAN.md](EXPANSION_PLAN.md) for remaining growth areas. The central depot, seeded resource assignment, technology branches, obstacle-aware bots, admin catalog editing, and battle replay foundations are already implemented; proposed content additions and more advanced global pathfinding remain future work.
 
 ## Product direction
 
@@ -12,15 +12,13 @@ Turn Robot Battle Arena into a browser-based incremental automation game. Player
 
 ## Core player loop
 
-1. **Program and deploy** robot jobs; Blockly instructions decide where bots go and what they collect.
-2. **Collect and deliver** salvage: resources occupy random seeded grid cells, and bots return cargo to the central storage depot before credits or parts are paid.
-3. **Grow the operation** with technology unlocks that expand the field, add visible structures/resource families, and improve production. Bounded server-resolved offline bot work is being added, with rewards still gated on actual depot delivery.
-3. **Spend** delivered resources on robots, factory stations, upgrades, research, and Blockly brain templates.
-4. **Automate** jobs by editing and deploying reusable programs; robot count and robot type affect throughput/capacity.
-5. **Run missions**: later PvE contracts and arena tests should also be visible simulations governed by the deployed program and pay only on successful return.
-6. **Improve** the robot roster, equipment, automation capacity, and Blockly programs.
-7. **Prestige** when progress slows: reset the current run for Core Shards and permanent bonuses, then rebuild faster.
-8. **Repeat** through scaling sectors, resource-site modifiers, collection goals, and prestige milestones.
+1. **Build the crew:** buy bots and unlock specialized roles through the technology tree.
+2. **Mine the voxel field:** role automation sends miners to solid blocks; a break leaves a resource pile.
+3. **Haul and deliver:** haulers reserve and collect piles; only depot delivery pays currency. Signed-in offline catch-up runs the same bounded server simulation.
+4. **Customize:** use automatic role behaviors by default or deploy explicit Blockly programs to the whole crew or individual bots.
+5. **Grow the operation** with technology that unlocks bot kinds/resources and changes spawn weights, delivery values, stock, and respawn time.
+6. **Spend** delivered resources on robots, upgrades, research, and programs.
+7. **Run missions and battles**, then improve the roster and prestige when progress slows.
 
 Battles are tactical demonstrations and asynchronous contests, not a mandatory real-time PvP queue. Players can submit a robot + immutable program/equipment snapshot. The opponent can submit later; a deterministic server simulation resolves the match. A replay is watchable in Three.js whenever either player returns.
 
@@ -28,11 +26,11 @@ Battles are tactical demonstrations and asynchronous contests, not a mandatory r
 
 | Currency | Role | Earned from | Spent on |
 |---|---|---|---|
-| Credits | Common, renewable | Delivered credit-cache salvage, missions, battle rewards, daily goals | Basic robots, stations, upgrades, templates |
-| Parts | Crafting material | Delivered scrap-cache salvage, dismantling duplicate items, missions | Equipment, robot tiers, advanced stations |
+| Credits | Common, renewable | Delivered credit-block drops, missions, battle rewards, daily goals | Basic robots, stations, upgrades, templates |
+| Parts | Crafting material | Delivered scrap-block drops, dismantling duplicate items, missions | Equipment, robot tiers, advanced stations |
 | Core Shards | Rare prestige currency | Prestige, one-time milestones, selected high-tier contracts | Permanent bonuses, premium templates, extra automation slots |
 
-Never sell paid power in the initial design. Do not award resources just because time passed or the player was away. Earnings come from completed, observable robot work. Prestige rewards use a bounded formula, are previewed before confirmation, and never subtract already-earned shards.
+Never sell paid power in the initial design. Online rewards require a completed depot delivery; offline rewards are calculated by bounded server-side simulation of that same delivery loop, not by a passive time multiplier. Prestige rewards use a bounded formula, are previewed before confirmation, and never subtract already-earned shards.
 
 ## Progression and balance
 
@@ -44,14 +42,14 @@ Never sell paid power in the initial design. Do not award resources just because
 
 ## Blockly and robot jobs
 
-Keep Blockly as the visual editor. The first supported instruction set is patrol → scan → collect a selected resource, plus wait/repeat. Deploying compiles only supported blocks into a bounded instruction list; assignments can target the whole crew or one robot and persist in the local save. The renderer never executes generated code. A robot can later be assigned to a factory job, PvE mission, or asynchronous battle with an immutable program snapshot. Add reusable, versioned brain templates (workspace JSON plus display name, category, unlock condition, price, and compatible job types). Never use `eval`/`new Function`.
+Keep Blockly as the visual editor for explicit custom programs. Standard bot roles run automatic mining, hauling, or support routines without requiring a Blockly program. The supported program instruction set includes patrol, scan, collect, wait/repeat, navigation, and bounded cargo/site conditionals; deployments can target the whole crew or one robot. Programs are validated and persisted for signed-in players. The renderer never executes generated code. Never use `eval`/`new Function`.
 
 ## Three.js simulation
 
-- Three.js is the browser renderer; simulation rules remain separate from rendering.
-- The initial `resources/js/simulation.js` is renderer-independent and testable in Node. Keep expanding it toward deterministic, headless-capable fixed-step rules; render its snapshots in Three.js.
-- Resource sites have visible stock/respawn; robots visibly travel, scan, gather cargo, and return to the home bay. A deployed program must change the robot's target and delivered resource.
-- Frame-rate changes, browser sleep, and offline time never mint resources. Clamp simulation delta and award only on a completed delivery event.
+- Three.js is the browser renderer; simulation rules remain separate from rendering. `resources/js/simulation-core.js` is renderer-independent and testable in Node; PHP mirrors server-authoritative rules.
+- The current field has 136 solid blocks; mining destroys a block and creates a separate pickup. A unique reservation prevents two bots working the same block or drop. Depleted blocks show a respawn countdown (60 seconds by default; alloy is 30 seconds with Field Refinery).
+- Ground bots route around live blocks and approach a free side; the flying miner ignores ground collisions. Stalled targets are released. This is bounded local steering rather than global A*.
+- Frame rate and browser sleep never directly mint resources. Online ticks are clamped and rewards follow depot delivery; signed-in offline catch-up uses bounded server-side fixed-step simulation and pays only its completed deliveries.
 - Keep a reduced-motion/low-quality mode and a 2D fallback for unsupported WebGL devices.
 - Server results must not depend on the player's frame rate, browser tab, or Three.js rendering.
 
@@ -88,12 +86,12 @@ Restrict every write endpoint to admins server-side. Admin sections should manag
 
 - **Items/equipment**: stable key, localized name/description, slot, stats, price/currency, unlocks, enabled flag.
 - **Upgrades/research**: cost curves, effects, prerequisites, repeatability, caps.
-- **Currencies/rewards**: delivery reward tables, mission payout ranges, simulation bounds, prestige formula; validate bounded values. Do not implement idle/offline accrual.
+- **Currencies/rewards**: delivery reward tables, mission payout ranges, simulation bounds, prestige formula; validate bounded values. Offline catch-up is bounded server simulation, not passive interest.
 - **Blockly templates**: serialized workspace, version, category, prices, prerequisites, compatibility, beginner/advanced visibility.
 - **Missions/jobs**: duration, requirements, reward tables, opponent rules, unlocks.
 - **Economy config**: global curves and feature flags.
 
-Require preview/validation before publish, immutable version history, audit log, and safe rollback. The current admin JSON textarea is a local prototype only and is not a production admin surface.
+Require preview/validation before publish, immutable version history, audit log, and safe rollback. The admin Catalog Studio includes structured catalog editors, Advanced JSON, typed technology-effect and prerequisite editors, and a draggable honeycomb node layout stored in catalog drafts.
 
 ## Data and security plan
 
@@ -105,18 +103,15 @@ Laravel migrations create users, community posts, wallets/ledger entries, versio
 
 ## Delivery milestones
 
-1. **Programmable salvage prototype (now)**: Laravel-served game, Three.js robot/resource motion, Blockly interpreter, delivery-based local economy, and community board.
-2. **Simulation depth**: more job instructions, visible work animations, resource-site variety, deterministic replay, accessibility/performance fallback.
-3. **Server-authoritative single-player**: Laravel economy ledger, validated job assignments/program versions, missions, and admin-managed catalog/templates. No passive/offline accrual.
-4. **Community safety and useful collaboration**: moderation/report/block, reliable collaboration groups, notifications, and server-owned inventory.
-5. **Progression depth and async PvP**: tiers, immutable match snapshots, resolver/replays, escrow-safe trades and rewards.
-6. **Live operations**: leagues/seasons, admin feature flags, metrics, economy tuning, anti-abuse monitoring.
+1. **Implemented foundation:** voxel mining/hauling, automatic bot roles, custom Blockly programs, server-authoritative deliveries and bounded offline catch-up.
+2. **Implemented progression/social systems:** technology/catalog editing, missions, co-op jobs, moderation, inventory escrow, PvE/PvP resolvers and replays.
+3. **Next expansion:** more terrain/zone variety, stronger global pathfinding and congestion handling, additional role/content branches, and live-operations monitoring.
 
 ## Initial acceptance criteria
 
 - A visitor can see a 3D animated factory and robots without a native install.
-- A robot earns nothing while idle or while the page is closed; running a program visibly sends it to a matching salvage site.
-- Changing a Blockly collect target changes the selected resource site and the resource delivered to the account.
+- Automatic miners visibly break blocks into drops; haulers retrieve them and currency is granted only on depot delivery.
+- Explicit Blockly programs remain deployable and can select a resource target; role automation is available without a program.
 - Currency changes only when a robot brings cargo back to the bay; simulation tests verify no early payout.
 - Credits can buy basic production; prestige creates Core Shards and resets a run while retaining permanent prestige progress.
 - Admins can edit prototype item/upgrade prices; production publishing will move to authenticated, versioned server content before launch.

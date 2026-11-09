@@ -83,6 +83,7 @@ class GameCatalogStudioTest extends TestCase
         $content['technologyNodes'][0]['effects']['unlockZones'] = ['deep_quarry'];
         $content['technologyNodes'][1]['effects']['stockMultipliers']['alloy'] = 2;
         $content['technologyNodes'][1]['effects']['respawnTimeMultipliers']['alloy'] = .75;
+        $content['technologyNodes'][0]['effects']['unlockCapabilities'] = ['remote_drone_ops'];
 
         $this->actingAs($admin)->postJson('/api.php?action=catalog_preview', ['content' => $content])
             ->assertOk()
@@ -90,7 +91,8 @@ class GameCatalogStudioTest extends TestCase
             ->assertJsonPath('preview.resources.2.zone', 'deep_quarry')
             ->assertJsonPath('preview.technologyNodes.0.effects.unlockZones.0', 'deep_quarry')
             ->assertJsonPath('preview.technologyNodes.1.effects.stockMultipliers.alloy', 2)
-            ->assertJsonPath('preview.technologyNodes.1.effects.respawnTimeMultipliers.alloy', .75);
+            ->assertJsonPath('preview.technologyNodes.1.effects.respawnTimeMultipliers.alloy', .75)
+            ->assertJsonPath('preview.technologyNodes.0.effects.unlockCapabilities.0', 'remote_drone_ops');
         $draft = $this->postJson('/api.php?action=catalog_draft', ['content' => $content])
             ->assertCreated()->assertJsonPath('status', 'draft');
         $this->assertSame('draft', $draft->json('status'));

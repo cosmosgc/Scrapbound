@@ -47,6 +47,9 @@ class GameCatalog
                     if (! preg_match('/^#[0-9a-fA-F]{6}$/', $entry['tint']) || ! is_numeric($entry['priceGrowth'] ?? null) || $entry['priceGrowth'] < 1 || $entry['priceGrowth'] > 5) {
                         throw new DomainException('Item tint or price growth is invalid.');
                     }
+                    if (isset($entry['unlockNode']) && (! is_string($entry['unlockNode']) || ! preg_match('/^[a-z][a-z0-9_]{1,39}$/', $entry['unlockNode']))) {
+                        throw new DomainException('Robot item unlock node is invalid.');
+                    }
                 } elseif (! is_string($entry['description'] ?? null) || strlen($entry['description']) > 200 || preg_match('/[<>]/', $entry['description'])) {
                     throw new DomainException('Upgrade description is invalid.');
                 }
@@ -83,9 +86,14 @@ class GameCatalog
             throw new DomainException('Catalog resources must be a bounded list.');
         }
         foreach ($resources as $index => $resource) {
+            $defaultResource = is_array($resource)
+                ? collect(config('scrapbound.resources', []))->firstWhere('id', $resource['id'] ?? null)
+                : null;
             if (is_array($resource) && ! array_key_exists('respawnSeconds', $resource)) {
-                $defaultResource = collect(config('scrapbound.resources', []))->firstWhere('id', $resource['id'] ?? null);
-                $resources[$index]['respawnSeconds'] = $defaultResource['respawnSeconds'] ?? 5;
+                $resources[$index]['respawnSeconds'] = $defaultResource['respawnSeconds'] ?? 60;
+            } elseif (is_array($resource) && ($resource['respawnSeconds'] ?? null) == 5 && ($defaultResource['respawnSeconds'] ?? 5) >= 60) {
+                // Upgrade previously published defaults as well as the config seed.
+                $resources[$index]['respawnSeconds'] = $defaultResource['respawnSeconds'];
             }
             if (is_array($resource) && ! array_key_exists('zone', $resource)) {
                 $defaultResource = collect(config('scrapbound.resources', []))->firstWhere('id', $resource['id'] ?? null);
@@ -120,6 +128,7 @@ class GameCatalog
             throw new DomainException('Technology nodes must be a bounded list.');
         }
         $nodeIds = [];
+        $gridCells = [];
         foreach ($technologyNodes as $node) {
             if (! is_array($node) || ! is_string($node['id'] ?? null) || ! preg_match('/^[a-z][a-z0-9_]{1,39}$/', $node['id'])
                 || in_array($node['id'], $nodeIds, true) || ! is_string($node['name'] ?? null) || strlen($node['name']) > 80
@@ -129,14 +138,27 @@ class GameCatalog
                 || ! array_is_list($node['prerequisites']) || ! is_array($node['effects'] ?? null)) {
                 throw new DomainException('Catalog contains an invalid or duplicate technology node.');
             }
-            if (array_diff(array_keys($node), ['id', 'name', 'description', 'cost', 'currency', 'prerequisites', 'effects'])) {
+            if (array_diff(array_keys($node), ['id', 'name', 'description', 'cost', 'currency', 'prerequisites', 'effects', 'gridPosition'])) {
                 throw new DomainException('Technology node contains unsupported fields.');
             }
+            if (isset($node['gridPosition']) && (! is_array($node['gridPosition'])
+                || ! is_int($node['gridPosition']['q'] ?? null) || ! is_int($node['gridPosition']['r'] ?? null)
+                || abs($node['gridPosition']['q']) > 20 || abs($node['gridPosition']['r']) > 20
+                || array_diff(array_keys($node['gridPosition']), ['q', 'r']))) {
+                throw new DomainException('Technology node grid position must contain bounded axial q/r coordinates.');
+            }
+            if (isset($node['gridPosition'])) {
+                $cell = $node['gridPosition']['q'].','.$node['gridPosition']['r'];
+                if (isset($gridCells[$cell])) {
+                    throw new DomainException('Technology nodes cannot share a honeycomb grid position.');
+                }
+                $gridCells[$cell] = true;
+            }
             $effects = $node['effects'];
-            if (array_diff(array_keys($effects), ['unlockResources', 'unlockZones', 'spawnWeightMultipliers', 'deliveryValueMultipliers', 'stockMultipliers', 'respawnTimeMultipliers', 'sceneUnlocks'])) {
+            if (array_diff(array_keys($effects), ['unlockResources', 'unlockZones', 'unlockCapabilities', 'unlockPrograms', 'unlockModules', 'unlockBotKinds', 'spawnWeightMultipliers', 'deliveryValueMultipliers', 'stockMultipliers', 'respawnTimeMultipliers', 'sceneUnlocks'])) {
                 throw new DomainException('Technology node contains an unsupported effect.');
             }
-            foreach (['unlockResources', 'unlockZones', 'sceneUnlocks'] as $listKey) {
+            foreach (['unlockResources', 'unlockZones', 'unlockCapabilities', 'unlockPrograms', 'unlockModules', 'unlockBotKinds', 'sceneUnlocks'] as $listKey) {
                 $values = $effects[$listKey] ?? [];
                 if (! is_array($values) || ! array_is_list($values) || count($values) > 100) {
                     throw new DomainException("Technology effect {$listKey} must be a bounded list.");
@@ -176,6 +198,11 @@ class GameCatalog
                 if (! in_array($zoneId, array_column($resources, 'zone'), true)) {
                     throw new DomainException('Technology effect references an unknown zone.');
                 }
+            }
+        }
+        foreach ($content['items'] as $item) {
+            if (isset($item['unlockNode']) && ! in_array($item['unlockNode'], $nodeIds, true)) {
+                throw new DomainException('Robot item references an unknown technology node.');
             }
         }
         foreach ($resources as $resource) {

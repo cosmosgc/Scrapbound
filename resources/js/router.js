@@ -3,9 +3,11 @@ import Navigo from 'navigo';
 const ROUTES = {
   '/factory': { view: 'factory', title: 'Factory floor' },
   '/brains': { view: 'brains', title: 'Brain lab' },
+  '/technology': { view: 'technology', title: 'Technology tree' },
   '/expeditions': { view: 'expeditions', title: 'Expeditions' },
   '/community': { view: 'community', title: 'Community board' },
   '/admin/catalog': { view: 'admin-catalog', title: 'Catalog studio' },
+  '/admin/technology': { view: 'admin-technology', title: 'Technology graph editor' },
 };
 
 export function createAppRouter(onRoute) {

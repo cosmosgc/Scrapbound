@@ -56,5 +56,5 @@ test('prestige awards permanent shards and resets cycle progress', () => {
   assert.equal(game.state.prestigeCount, 2);
   assert.equal(game.state.credits, 120);
   assert.equal(game.state.lifetimeCredits, 0);
-  assert.deepEqual(game.state.owned, { scavenger: 1, scrap_hound: 0, fabricator: 0 });
+  assert.deepEqual(game.state.owned, { scavenger: 1, scrap_hound: 0, fabricator: 0, sky_miner: 0, block_miner: 0, cargo_hauler: 0, buffer_bot: 0 });
 });

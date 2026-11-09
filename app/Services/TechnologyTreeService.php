@@ -106,9 +106,11 @@ class TechnologyTreeService
 
     private function mergeEffects(array $effectSets): array
     {
-        $merged = ['unlockResources' => [], 'unlockZones' => [], 'spawnWeightMultipliers' => [], 'deliveryValueMultipliers' => [], 'stockMultipliers' => [], 'respawnTimeMultipliers' => [], 'sceneUnlocks' => []];
+        $listKeys = ['unlockResources', 'unlockZones', 'unlockCapabilities', 'unlockPrograms', 'unlockModules', 'unlockBotKinds', 'sceneUnlocks'];
+        $merged = array_fill_keys($listKeys, []);
+        $merged += ['spawnWeightMultipliers' => [], 'deliveryValueMultipliers' => [], 'stockMultipliers' => [], 'respawnTimeMultipliers' => []];
         foreach ($effectSets as $effects) {
-            foreach (['unlockResources', 'unlockZones', 'sceneUnlocks'] as $listKey) {
+            foreach ($listKeys as $listKey) {
                 $merged[$listKey] = array_values(array_unique([...$merged[$listKey], ...($effects[$listKey] ?? [])]));
             }
             foreach (['spawnWeightMultipliers', 'deliveryValueMultipliers', 'stockMultipliers', 'respawnTimeMultipliers'] as $mapKey) {

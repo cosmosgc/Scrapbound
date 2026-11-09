@@ -256,10 +256,10 @@ class ScrapboundController extends Controller
             User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
             $idleState = app(PlayerIdleProgressService::class)->stateForLockedUser($user);
             $jobState = app(PlayerJobService::class)->jobs($user);
-            $owned = ['scavenger' => 0, 'scrap_hound' => 0, 'fabricator' => 0];
+            $owned = array_fill_keys(array_column(app(GameCatalog::class)->active()['items'], 'id'), 0);
             $unitPrograms = [];
             foreach ($jobState['robots'] as $robot) {
-                $owned[$robot['kind']]++;
+                if (array_key_exists($robot['kind'], $owned)) $owned[$robot['kind']]++;
                 $unitPrograms[(int) $robot['id']] = $robot['program'];
             }
             $input = [
@@ -306,7 +306,7 @@ class ScrapboundController extends Controller
                 'seed' => $input['seed'],
                 'ticks' => $input['ticks'],
                 'payouts' => $resolved['payouts'],
-                'snapshot' => ['robots' => $resolved['robots'], 'nodes' => $resolved['nodes']],
+                'snapshot' => ['robots' => $resolved['robots'], 'nodes' => $resolved['nodes'], 'drops' => $resolved['drops']],
                 'wallet' => ['credits' => $wallet->credits, 'scrap' => $wallet->scrap],
             ];
             RobotSimulationRunReceipt::create([
@@ -464,7 +464,7 @@ class ScrapboundController extends Controller
     {
         abort_unless(Auth::check(), 401, 'Sign in to purchase robots.');
         $data = $request->validate([
-            'kind' => ['required', Rule::in(['scavenger', 'scrap_hound', 'fabricator'])],
+            'kind' => ['required', 'string', 'regex:/^[a-z][a-z0-9_]{1,39}$/'],
             'idempotency_key' => ['required', 'string', 'regex:/^[A-Za-z0-9._:-]{8,64}$/'],
         ]);
         try {

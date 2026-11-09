@@ -246,19 +246,46 @@ test('signed-in player can research geological survey and see the technology unl
   await page.locator('#auth-submit').click();
   await expect(page.locator('#auth-button')).toContainText(username);
   const settlement = await (await idleSettlement).json();
-  expect(settlement.snapshot.nodes).toHaveLength(8);
+  expect(settlement.snapshot.nodes).toHaveLength(136);
   const firstSite = settlement.snapshot.nodes[0];
   await expect(page.locator('#factory-scene')).toHaveAttribute(
     'aria-label',
     new RegExp(`${firstSite.resource} site at x ${firstSite.x}, z ${firstSite.z}`),
   );
+  await page.locator('a[data-route="/technology"]').click();
+  await expect(page.locator('#view-technology')).toHaveClass(/active/);
+  await expect(page.locator('#view-factory')).not.toHaveClass(/active/);
+  await expect(page.locator('.nav-link[data-route="/technology"]')).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('#technology-tree')).toContainText('Geological survey');
-  await expect(page.locator('#technology-tree')).toContainText('AVAILABLE RESEARCH');
+  await expect(page.locator('#technology-tree')).toContainText('READY TO RESEARCH');
+  await expect(page.locator('#technology-tree .technology-map')).toBeVisible();
+  await expect(page.locator('#technology-tree .technology-link')).toHaveCount(8);
+  await expect(page.locator('#technology-tree [data-tech-node]')).toHaveCount(8);
+  const connectorInsets = await page.locator('#technology-tree .technology-map').evaluate(map => {
+    const nodes = [...map.querySelectorAll('[data-tech-node]')].map(element => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    });
+    return [...map.querySelectorAll('.technology-link')].flatMap(path => {
+      const points = [path.getPointAtLength(0), path.getPointAtLength(path.getTotalLength())]
+        .map(point => point.matrixTransform(path.getScreenCTM()));
+      return points.map(point => Math.min(...nodes.map(node => Math.hypot(point.x - node.x, point.y - node.y))));
+    });
+  });
+  expect(connectorInsets).toHaveLength(16);
+  expect(connectorInsets.every(distance => distance >= 80 && distance <= 101)).toBeTruthy();
+  await expect(page.locator('#technology-tree')).toContainText('Deep veins');
+  await expect(page.locator('#technology-tree')).toContainText('Sorting rig');
+  await page.locator('#technology-tree [data-tech-node="prospecting"]').hover();
+  await expect(page.locator('#technology-tip-prospecting')).toBeVisible();
+  await expect(page.locator('#technology-tip-prospecting')).toContainText('Open the quarry zone');
   await page.locator('#technology-tree [data-tech-purchase="prospecting"]').click();
-  await expect(page.locator('#technology-tree')).toContainText('RESEARCH COMPLETE');
+  await expect(page.locator('#technology-tree')).toContainText('RESEARCHED');
   await expect(page.locator('#technology-tree')).toContainText('Unlocks alloy');
   await expect(page.locator('#technology-tree')).toContainText('Opens quarry zone');
   await expect(page.locator('#credits-server')).toHaveText('SERVER ¢30');
+  await expect(page.locator('#technology-tree [data-tech-node="deep_veins"]')).toHaveClass(/technology-available/);
+  await expect(page.locator('#technology-tree [data-tech-node="sorting_rig"]')).toHaveClass(/technology-available/);
   await page.locator('#technology-tree [data-tech-purchase="refinery"]').click();
   await expect(page.locator('#technology-tree')).toContainText('alloy stock ×1.5');
   await expect(page.locator('#technology-tree')).toContainText('alloy restock time ×0.5');

@@ -108,6 +108,27 @@ export function createBrainWorkshop() {
     document.getElementById('brain-name').textContent = nameInput.value.trim() || 'Untitled brain';
     document.dispatchEvent(new CustomEvent('scrapbound-toast', { detail: 'Brain saved in this browser.' }));
   });
+  const deployTarget = document.getElementById('brain-deploy-target');
+  let editorTarget = deployTarget.value || 'all';
+  const draftKey = target => `scrapbound.brain-draft.v1:${target}`;
+  deployTarget.addEventListener('change', () => {
+    localStorage.setItem(draftKey(editorTarget), JSON.stringify(Blockly.serialization.workspaces.save(workspace)));
+    editorTarget = deployTarget.value;
+    try {
+      const draft = JSON.parse(localStorage.getItem(draftKey(editorTarget)) || 'null');
+      if (draft) Blockly.serialization.workspaces.load(draft, workspace);
+      else loadTemplate(workspace);
+    } catch { loadTemplate(workspace); }
+    nameInput.value = editorTarget.startsWith('role:') ? `${editorTarget.slice(5).replaceAll('_', ' ')} brain` : 'Robot routine';
+    document.getElementById('brain-name').textContent = nameInput.value;
+  });
+  try {
+    const initialDraft = JSON.parse(localStorage.getItem(draftKey(editorTarget)) || 'null');
+    if (initialDraft) Blockly.serialization.workspaces.load(initialDraft, workspace);
+  } catch {}
+  workspace.addChangeListener(event => {
+    if (!event.isUiEvent) localStorage.setItem(draftKey(editorTarget), JSON.stringify(Blockly.serialization.workspaces.save(workspace)));
+  });
   document.getElementById('deploy-brain').addEventListener('click', () => {
     const compiled = compileProgram(workspace);
     if (compiled.error) {
@@ -120,9 +141,9 @@ export function createBrainWorkshop() {
       return;
     }
     const target = document.getElementById('brain-deploy-target').value;
-    const targetId = target === 'all' ? null : Number(target.slice('unit:'.length));
+    const targetId = target === 'all' ? null : target.startsWith('role:') ? target : Number(target.slice('unit:'.length));
     document.dispatchEvent(new CustomEvent('scrapbound-deploy-program', { detail: { program, targetId } }));
-    const assignment = targetId === null ? 'the whole crew' : `unit ${String(targetId + 1).padStart(2, '0')}`;
+    const assignment = targetId === null ? 'the whole crew' : typeof targetId === 'string' ? `the ${targetId.slice(5)} role` : `unit ${String(targetId + 1).padStart(2, '0')}`;
     document.getElementById('brain-status').textContent = `Deployed ${program.length} instruction${program.length === 1 ? '' : 's'} to ${assignment}. Watch the factory to see it run.`;
   });
   nameInput.addEventListener('input', () => { document.getElementById('brain-name').textContent = nameInput.value || 'Untitled brain'; });

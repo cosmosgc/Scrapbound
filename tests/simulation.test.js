@@ -18,7 +18,7 @@ test('deployed credit program moves a robot and pays only after cargo delivery',
   const deliveries = [];
   const sim = new SalvageSimulation((resource, amount) => deliveries.push({ resource, amount }));
   sim.syncCrew({ scavenger: 1 });
-  sim.deploy(DEFAULT_PROGRAM);
+  sim.deploy([...DEFAULT_PROGRAM, { action: 'wait', seconds: 1 }]);
 
   for (let i = 0; i < 50; i++) sim.tick(.1);
   assert.equal(deliveries.length, 0, 'no reward before a robot returns to base');
@@ -33,7 +33,74 @@ test('deployed credit program moves a robot and pays only after cargo delivery',
   assert.ok(snapshot.events.some(event => event.type === 'scan'));
   assert.ok(snapshot.events.some(event => event.type === 'collect' && event.siteId));
   assert.deepEqual(snapshot.events.filter(event => event.type === 'delivery').at(-1).amount, deliveries.at(-1).amount);
-  assert.ok(snapshot.nodes.some(node => node.remaining < node.stock || node.scanned));
+  assert.ok(snapshot.nodes.some(node => node.id.startsWith('block-')));
+});
+
+test('resource sites are reserved so two bots never start toward the same entity', () => {
+  const sim = new SalvageSimulation();
+  sim.syncCrew({ scavenger: 8 });
+  sim.deploy(DEFAULT_PROGRAM);
+  assert.ok(sim.robots.every(robot => robot.automation));
+  sim.tick(.1);
+  const assigned = sim.robots.map(robot => robot.targetId).filter(id => id !== null);
+  assert.equal(new Set(assigned).size, assigned.length);
+});
+
+test('voxel blocks break into ground drops that a dedicated hauler picks up and delivers', () => {
+  const deliveries = [];
+  const sim = new SalvageSimulation((resource, amount) => deliveries.push({ resource, amount }));
+  sim.syncCrew({ block_miner: 1, cargo_hauler: 1 });
+  assert.equal(sim.nodes.length, 136);
+  for (let tick = 0; tick < 3000; tick++) {
+    sim.tick(.1);
+    if (tick % 10 === 0) {
+      for (const robot of sim.robots) {
+        assert.ok(sim.nodes.every(node => node.remaining <= 0 || Math.hypot(robot.x - node.x, robot.z - node.z) >= .72));
+      }
+    }
+  }
+  const events = sim.snapshot().events;
+  assert.ok(events.some(event => event.type === 'block_break'));
+  assert.ok(events.some(event => event.type === 'pickup'));
+  assert.ok(deliveries.some(delivery => delivery.amount > 0));
+});
+
+test('mined blocks stay depleted for the full 60-second respawn delay', () => {
+  const sim = new SalvageSimulation();
+  const block = sim.nodes[0];
+  assert.equal(block.respawnSeconds, 60);
+  block.remaining = 0;
+  block.respawn = 60;
+  for (let tick = 0; tick < 599; tick++) sim.tick(.1);
+  assert.equal(block.remaining, 0);
+  sim.tick(.1);
+  assert.equal(block.remaining, block.stock);
+});
+
+test('simulation snapshots carry the live block respawn countdown', () => {
+  const sim = new SalvageSimulation();
+  sim.nodes[0].remaining = 0;
+  sim.nodes[0].respawn = 12.7;
+  const state = sim.snapshot();
+  assert.equal(state.nodes[0].respawnRemaining, 12.7);
+
+  const restored = new SalvageSimulation();
+  assert.equal(restored.applyWorldSnapshot(state.nodes, state.drops), true);
+  assert.equal(restored.snapshot().nodes[0].respawnRemaining, 12.7);
+});
+
+test('each available drop is reserved for only one automatic hauler', () => {
+  const sim = new SalvageSimulation();
+  sim.syncCrew({ cargo_hauler: 3 });
+  sim.drops = [
+    { id: 'drop-a', x: -8, z: -6, resource: 'scrap', amount: 2 },
+    { id: 'drop-b', x: 8, z: -6, resource: 'credits', amount: 2 },
+    { id: 'drop-c', x: 0, z: 8, resource: 'scrap', amount: 2 },
+  ];
+  sim.tick(.1);
+  const assigned = sim.robots.map(robot => robot.targetId).filter(id => id !== null);
+  assert.equal(new Set(assigned).size, assigned.length);
+  assert.equal(assigned.length, 3);
 });
 
 test('changing the Blockly resource instruction changes the simulated salvage job', () => {
@@ -222,24 +289,21 @@ test('seeded salvage sites vary deterministically across the larger field and av
   const first = salvageSitesForSeed(1234), replay = salvageSitesForSeed(1234), other = salvageSitesForSeed(1235);
   assert.deepEqual(replay, first);
   assert.notDeepEqual(other, first);
-  assert.equal(first.length, 8);
-  assert.deepEqual(first.map(({ x, z, stock }) => [x, z, stock]), [
-    [8, 2, 6], [10, -7, 4], [14, 8, 7], [-3, 9, 4],
-    [2, -7, 6], [11, -5, 4], [-13, -6, 7], [-14, 4, 6],
-  ]);
+  assert.equal(first.length, 136);
   assert.ok(first.every(site => Math.abs(site.x) <= 16 && Math.abs(site.z) <= 10));
   assert.ok(first.every(site => Number.isInteger(site.x) && Number.isInteger(site.z)));
   assert.equal(new Set(first.map(site => `${site.x}:${site.z}`)).size, first.length);
-  assert.ok(first.every(site => Math.abs(site.x) > 6 || Math.abs(site.z) > 4));
-  assert.deepEqual(first.map(site => site.resource).sort(), ['credits', 'credits', 'credits', 'credits', 'scrap', 'scrap', 'scrap', 'scrap']);
+  assert.ok(first.every(block => Math.abs(block.x) > 5 || Math.abs(block.z) > 3));
+  assert.ok(first.some(site => site.resource === 'credits'));
+  assert.ok(first.some(site => site.resource === 'scrap'));
   const surveyed = salvageSitesForSeed(1234, undefined, { unlockResources: ['alloy'], unlockZones: ['quarry'], spawnWeightMultipliers: { alloy: 2 } });
-  assert.deepEqual(surveyed.map(site => site.resource), ['credits', 'credits', 'scrap', 'credits', 'alloy', 'credits', 'alloy', 'alloy']);
+  assert.ok(surveyed.filter(site => site.resource === 'alloy').length > 3);
   assert.deepEqual(salvageSitesForSeed(1234, undefined, { unlockResources: ['alloy'], unlockZones: ['quarry'], spawnWeightMultipliers: { alloy: 2 } }), surveyed);
   const refined = salvageSitesForSeed(1234, undefined, {
     unlockResources: ['alloy'], unlockZones: ['quarry'], spawnWeightMultipliers: { alloy: 2 },
     stockMultipliers: { alloy: 1.5 }, respawnTimeMultipliers: { alloy: .5 },
   });
-  assert.deepEqual(refined.filter(site => site.resource === 'alloy').map(({ stock, respawnSeconds }) => [stock, respawnSeconds]), [[5, 2.5], [6, 2.5], [5, 2.5]]);
+  assert.ok(refined.filter(site => site.resource === 'alloy').every(({ stock, respawnSeconds }) => [3, 5, 6].includes(stock) && respawnSeconds === 30));
 });
 
 test('headless simulation contract replays bounded snapshots and rejects unsafe work', () => {

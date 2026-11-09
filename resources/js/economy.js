@@ -3,6 +3,10 @@ export const items = [
   { id: 'scavenger', name: 'Scavenger bot', role: 'General-purpose salvage runner', icon: '⌕', cost: 55, currency: 'credits', tint: '#a4d66d' },
   { id: 'scrap_hound', name: 'Scrap hound', role: 'Quick salvage specialist', icon: '▧', cost: 35, currency: 'credits', tint: '#e7a34f' },
   { id: 'fabricator', name: 'Auto-fabricator', role: 'Heavy-duty collection unit', icon: '⚒', cost: 110, currency: 'scrap', tint: '#78b7c9' },
+  { id: 'sky_miner', name: 'Skydrill', role: 'Fast flying block miner; slow extraction, obstacle-proof flight.', icon: '✦', cost: 180, currency: 'credits', tint: '#8ad8df', unlockNode: 'aerial_mining' },
+  { id: 'block_miner', name: 'Quarry borer', role: 'Dedicated block miner; fast extraction, cannot haul drops.', icon: '⛏', cost: 140, currency: 'scrap', tint: '#d69d65', unlockNode: 'quarry_boring' },
+  { id: 'cargo_hauler', name: 'Cargo mule', role: 'Collects mined resource drops and delivers them to the depot.', icon: '▰', cost: 160, currency: 'credits', tint: '#a9c875', unlockNode: 'haul_network' },
+  { id: 'buffer_bot', name: 'Field buffer', role: 'Boosts nearby miners and haulers.', icon: '◉', cost: 220, currency: 'scrap', tint: '#b4a0dc', unlockNode: 'field_support' },
 ];
 
 export const upgrades = [
@@ -19,7 +23,7 @@ export function setEconomyCatalog(catalog) {
   if (catalog?.rewards) rewardCatalog = { ...rewardCatalog, ...catalog.rewards };
 }
 
-const freshSave = () => ({ version: 2, credits: 120, scrap: 18, shards: 0, sector: 1, prestigeCount: 0, owned: { scavenger: 1, scrap_hound: 0, fabricator: 0 }, bought: {}, lastSeen: Date.now(), lifetimeCredits: 0 });
+const freshSave = () => ({ version: 2, commissions: [], credits: 120, scrap: 18, shards: 0, sector: 1, prestigeCount: 0, owned: { scavenger: 1, scrap_hound: 0, fabricator: 0, sky_miner: 0, block_miner: 0, cargo_hauler: 0, buffer_bot: 0 }, bought: {}, lastSeen: Date.now(), lifetimeCredits: 0 });
 function load() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));

@@ -8,8 +8,12 @@ const CrewSchema = z.object({
   scavenger: z.number().int().min(0).max(20).default(1),
   scrap_hound: z.number().int().min(0).max(20).default(0),
   fabricator: z.number().int().min(0).max(20).default(0),
-}).strict().default({ scavenger: 1, scrap_hound: 0, fabricator: 0 }).superRefine((crew, context) => {
-  if (crew.scavenger + crew.scrap_hound + crew.fabricator > 20) {
+  sky_miner: z.number().int().min(0).max(20).default(0),
+  block_miner: z.number().int().min(0).max(20).default(0),
+  cargo_hauler: z.number().int().min(0).max(20).default(0),
+  buffer_bot: z.number().int().min(0).max(20).default(0),
+}).strict().default({ scavenger: 1, scrap_hound: 0, fabricator: 0, sky_miner: 0, block_miner: 0, cargo_hauler: 0, buffer_bot: 0 }).superRefine((crew, context) => {
+  if (Object.values(crew).reduce((total, count) => total + count, 0) > 20) {
     context.addIssue({ code: 'custom', message: 'Crew size cannot exceed 20 robots.' });
   }
 });
@@ -28,7 +32,7 @@ export const SimulationInputSchema = z.object({
   ticks: z.number().int().min(0).max(MAX_SIMULATION_TICKS),
 }).strict().superRefine((input, context) => {
   for (const unitId of Object.keys(input.assignments?.units || {})) {
-    const crewSize = input.crew.scavenger + input.crew.scrap_hound + input.crew.fabricator;
+    const crewSize = Object.values(input.crew).reduce((total, count) => total + count, 0);
     if (!/^(0|[1-9]\d*)$/.test(unitId) || Number(unitId) >= crewSize) {
       context.addIssue({ code: 'custom', path: ['assignments', 'units', unitId], message: 'Unit program keys must reference an owned robot.' });
     }

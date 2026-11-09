@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Models\GameCatalogVersion;
+use App\Services\GameCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -21,6 +23,9 @@ class TechnologyTreeTest extends TestCase
             ->assertJsonPath('owned_node_ids', [])
             ->assertJsonPath('nodes.0.id', 'prospecting')
             ->assertJsonPath('nodes.0.available', true)
+            ->assertJsonPath('nodes.1.prerequisites.0', 'prospecting')
+            ->assertJsonPath('nodes.2.prerequisites.0', 'prospecting')
+            ->assertJsonPath('nodes.3.prerequisites.0', 'prospecting')
             ->assertJsonPath('resources.2.id', 'alloy');
 
         $this->postJson('/api.php?action=technology_purchase', [
@@ -52,5 +57,26 @@ class TechnologyTreeTest extends TestCase
         $this->assertDatabaseCount('player_technology_unlocks', 2);
         $this->assertDatabaseCount('player_technology_purchase_receipts', 2);
         $this->assertDatabaseHas('currency_ledger_entries', ['user_id' => $user->id, 'reason' => 'technology_purchase']);
+    }
+
+    public function test_purchased_nodes_preserve_future_capability_unlock_effects(): void
+    {
+        $user = User::create(['username' => 'FutureTechPilot', 'password' => 'safe-example-password']);
+        $content = app(GameCatalog::class)->validate(config('scrapbound'));
+        $content['technologyNodes'][0]['effects']['unlockCapabilities'] = ['remote_drone_ops'];
+        $content['technologyNodes'][0]['effects']['unlockPrograms'] = ['salvage_route_v2'];
+        $content['technologyNodes'][0]['effects']['unlockModules'] = ['deep_scanner'];
+        $content['technologyNodes'][0]['effects']['unlockBotKinds'] = ['survey_rover'];
+        GameCatalogVersion::create([
+            'version' => 99, 'status' => 'published', 'content' => $content, 'published_at' => now(),
+        ]);
+
+        $this->actingAs($user)->postJson('/api.php?action=technology_purchase', [
+            'node_id' => 'prospecting', 'request_key' => 'future-tech-unlocks-001',
+        ])->assertOk()
+            ->assertJsonPath('technology.effects.unlockCapabilities.0', 'remote_drone_ops')
+            ->assertJsonPath('technology.effects.unlockPrograms.0', 'salvage_route_v2')
+            ->assertJsonPath('technology.effects.unlockModules.0', 'deep_scanner')
+            ->assertJsonPath('technology.effects.unlockBotKinds.0', 'survey_rover');
     }
 }

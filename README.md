@@ -28,8 +28,11 @@ On Windows, run `build.bat` to install Composer/npm dependencies, build assets i
 - Large interactive workshop view with fullscreen, drag-orbit/scroll-zoom camera, robot follow, keyboard/mouse piloting, and WebGL fallback
 - Local credits/scrap, robot purchases, delivery-based earning, and upgrades
 - Salvage missions and Core Shard prestige
-- Blockly brain workshop with navigation, conditionals, return-to-base actions, browser-local programs, and per-bot keyboard/mouse control profiles
-- A visible salvage loop: assign a program to the whole crew or a specific robot; robots patrol, scan, collect a chosen resource, and return cargo. Assignments persist locally; there is no idle/offline payout.
+- Blockly brain workshop with navigation, conditionals, return-to-base actions, custom programs, and per-bot keyboard/mouse control profiles
+- Voxel mining field with 136 solid blocks, breakable resources, collectible drop piles, 60-second respawn countdowns, and exclusive bot reservations per block/drop
+- Automatic role behaviors and distinct 3D models for miners, haulers, flyers, fabricators, and buffers; Blockly remains available for explicit custom programs
+- Technology-unlocked bot roles, resource zones, and production modifiers
+- Admin Catalog Studio with structured resource/technology editing and a draggable, saved honeycomb layout for technology nodes
 - Laravel sign-in, server-authoritative wallets/inventory, escrow item-for-credit trades, and a community board for help, negotiation posts, replies, and collaboration
 
 ## Enable accounts and community
@@ -40,4 +43,4 @@ On Windows, run `build.bat` to install Composer/npm dependencies, build assets i
 
 Community trade posts are negotiation offers only. Targeted item trades reserve catalog-tradable inventory, then atomically exchange items and credits when the named recipient accepts. The server checks each offer's expiry timestamp when trade offers are viewed or acted on, so no background scheduler is needed for escrow release. Replies are public to anyone who can access the board. Use unique passwords and do not post personal contact information.
 
-See the [game plan](docs/GAMEPLAN.md), the proposed [expansion plan](docs/EXPANSION_PLAN.md), [development queue](docs/DEVELOPMENT_QUEUE.md), [working backlog](docs/BACKLOG.md), and [installed libraries](docs/SUGGESTED_LIBRARIES.md), including the [trade-off evaluation](docs/SUGGESTED_LIBRARIES_EVALUATION.md) and separate package notes.
+See the current [voxel mining and bot-role guide](docs/VOXEL_MINING.md), [game plan](docs/GAMEPLAN.md), [expansion plan](docs/EXPANSION_PLAN.md), [development queue](docs/DEVELOPMENT_QUEUE.md), [working backlog](docs/BACKLOG.md), and [installed libraries](docs/SUGGESTED_LIBRARIES.md), including the [trade-off evaluation](docs/SUGGESTED_LIBRARIES_EVALUATION.md) and separate package notes.

@@ -73,9 +73,6 @@ class PlayerJobService
 
     public function purchaseRobot(User $user, string $kind, string $idempotencyKey): array
     {
-        if (! in_array($kind, ['scavenger', 'scrap_hound', 'fabricator'], true)) {
-            throw new DomainException('Unknown robot type.');
-        }
         $this->ensurePlayer($user);
 
         return DB::transaction(function () use ($user, $kind, $idempotencyKey): array {
@@ -95,6 +92,9 @@ class PlayerJobService
             $item = collect(app(GameCatalog::class)->active()['items'])->firstWhere('id', $kind);
             if (! $item) {
                 throw new DomainException('Robot type is not in the active catalog.');
+            }
+            if (isset($item['unlockNode']) && ! in_array($kind, app(TechnologyTreeService::class)->effectsFor($user)['unlockBotKinds'], true)) {
+                throw new DomainException('Research the required technology before purchasing this robot.');
             }
             $owned = $robots->where('kind', $kind)->count();
             $cost = (int) ceil($item['cost'] * (($item['priceGrowth'] ?? 1.17) ** $owned));
