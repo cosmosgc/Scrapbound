@@ -16,6 +16,8 @@ import { FactoryProgression } from './factory-progression.js';
 import './factory-progression.css';
 import { BotInspector } from './bot-inspector.js';
 import './toy-factory.css';
+import { enhanceResearch } from './workshop-tools.js';
+import './workshop-tools.css';
 
 const economy = new Economy();
 const progression = new FactoryProgression(economy, () => render(), message => toast(message));
@@ -30,6 +32,7 @@ let localSimulationValues = { credits: economy.state.credits, scrap: economy.sta
 let localSimulationAccount = null;
 let worldSeed = crypto.getRandomValues(new Uint32Array(1))[0];
 let technologyState = null;
+let technologyPreview = [];
 const simulation = new SalvageSimulation((resource, amount) => {
   if (!account) {
     economy.deliver(resource, amount);
@@ -574,6 +577,7 @@ async function loadGameCatalog() {
   const response = await apiRequest('catalog');
   if (!response.ok || !response.catalog) return;
   const catalog = response.catalog;
+  technologyPreview = (catalog.technologyNodes || []).map(node => ({ ...node, owned: false, available: false }));
   setEconomyCatalog(catalog); setSimulationCatalog(catalog);
   simulation.setResourceDefinitions(catalog.resources || []);
   if (Array.isArray(catalog.items) && catalog.items.length) items.splice(0, items.length, ...catalog.items);
@@ -669,6 +673,7 @@ function renderAdminTechnologyGraph() {
     section?.open && section.scrollIntoView({ behavior: 'smooth', block: 'start' });
     const entry = [...($('technology-structured-editor').querySelectorAll('.structured-entry'))]
       .find(element => element.querySelector('input[data-editor-path]')?.value === node?.id);
+    if (entry) { entry.hidden = false; entry.open = true; }
     entry?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }));
 }
@@ -683,6 +688,7 @@ function renderCatalogForms() {
 
 function applyCatalogEditorChange(event) {
   const target = event.target;
+  if (target.closest('.studio-toolbar, .studio-section-nav')) return;
   // Both dropdowns apply their selection immediately; process them before the
   // normal form handler rerenders the editor and resets the select element.
   if (target.matches('[data-effect-choice]')) {
@@ -967,15 +973,15 @@ function renderUpgrades() {
 
 function renderTechnologyTree() {
   const host = $('technology-tree');
-  if (!account) {
-    host.innerHTML = '<div class="panel-note">Sign in to research persistent technologies that change resource spawns, delivery values, and the visible field.</div>';
-    return;
-  }
-  if (!technologyState) {
+  if (account && !technologyState) {
+    delete host.dataset.renderKey;
     host.innerHTML = '<div class="panel-note">Loading server technology…</div>';
     return;
   }
-  const nodes = technologyState.nodes || [];
+  const nodes = account ? technologyState.nodes || [] : technologyPreview;
+  const renderKey = JSON.stringify([!!account, nodes, economy.state.credits, economy.state.scrap]);
+  if (host.dataset.renderKey === renderKey) return;
+  host.dataset.renderKey = renderKey;
   if (!nodes.length) {
     host.innerHTML = '<div class="panel-note">No technology nodes are published yet.</div>';
     return;
@@ -1068,13 +1074,14 @@ function renderTechnologyTree() {
     return `<article class="technology-node ${node.owned ? 'technology-owned' : ''} ${node.available ? 'technology-available' : ''}" data-tech-node="${safe(node.id)}" tabindex="0" aria-describedby="${tooltipId}" style="left:${position.x - hexWidth / 2}px;top:${position.y - hexHeight / 2}px"><button class="technology-hex" data-tech-purchase="${safe(node.id)}" aria-label="${safe(node.name)}: ${status}" ${!node.available || node.owned || !affordable ? 'disabled' : ''}><span class="technology-glyph">${glyph}</span><strong>${safe(node.name)}</strong><small>${status}</small><span class="technology-hex-cost">${node.owned ? '✓ COMPLETE' : `${node.cost} ${node.currency === 'credits' ? '¢' : '▧'}`}</span></button><div class="technology-tooltip" id="${tooltipId}" role="tooltip"><b>${safe(node.name)}</b><p>${safe(node.description)}</p><small>${safe(prereqs)}</small>${unlocks.length ? `<ul>${unlocks.map(effect => `<li>${safe(effect)}</li>`).join('')}</ul>` : ''}<span class="technology-tooltip-cost">${node.owned ? 'Already researched' : `${node.cost} ${node.currency === 'credits' ? 'credits' : 'scrap'}${!node.available ? ' · unlock prerequisite first' : !affordable ? ' · insufficient resources' : ' · select node to research'}`}</span></div></article>`;
   }).join('');
   host.innerHTML = `<div class="technology-legend"><span><i class="technology-legend-dot owned"></i> Researched</span><span><i class="technology-legend-dot available"></i> Available</span><span><i class="technology-legend-dot locked"></i> Locked by prerequisites</span><span class="subtle">Hover or focus a node for details</span></div><div class="technology-map-scroll"><div class="technology-map technology-honeycomb" style="width:${width}px;height:${height}px"><svg class="technology-connections" viewBox="0 0 ${width} ${height}" aria-hidden="true">${connections}</svg>${nodeCards}</div></div>`;
+  enhanceResearch(host, nodes, !!account);
   host.querySelectorAll('[data-tech-purchase]').forEach(button => button.addEventListener('click', async () => {
     if (!account || button.disabled) return;
     button.disabled = true;
-    if (!await settleOfflineProgress()) { toast('Settle current bot deliveries before researching.'); return; }
+    if (!await settleOfflineProgress()) { button.disabled = false; toast('Settle current bot deliveries before researching.'); return; }
     const nodeId = button.dataset.techPurchase;
     const result = await apiRequest('technology_purchase', 'POST', { node_id: nodeId, request_key: crypto.randomUUID() });
-    if (!result.ok) { toast(result.error || 'Research purchase failed.'); render(); return; }
+    if (!result.ok) { button.disabled = false; toast(result.error || 'Research purchase failed.'); render(); return; }
     technologyState = result.technology;
     economy.state.credits = Number(result.wallet.credits);
     economy.state.scrap = Number(result.wallet.scrap);
@@ -1326,6 +1333,7 @@ document.addEventListener('fullscreenchange', () => {
 });
 $('simulation-toggle').addEventListener('click', event => {
   simulationPaused = !simulationPaused;
+  scene.paused = simulationPaused;
   event.currentTarget.textContent = simulationPaused ? '▶ Resume' : 'Ⅱ Pause';
   event.currentTarget.setAttribute('aria-pressed', String(simulationPaused));
   $('scene-rate').textContent = simulationPaused ? 'Paused' : `${simulationSpeed}× speed`;

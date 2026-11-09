@@ -1,3 +1,5 @@
+import { catalogToolbar, bindCatalogToolbar } from './workshop-tools.js';
+
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const label = value => String(value).replace(/([a-z])([A-Z])/g, '$1 $2').replaceAll('_', ' ').replace(/^./, character => character.toUpperCase());
 const pathAttribute = path => escapeHtml(JSON.stringify(path));
@@ -47,7 +49,7 @@ function renderValue(value, key, path, rootContent, parentArray = false, index =
   }
   if (Array.isArray(value)) {
     if (value.length && value.every(entry => entry && typeof entry === 'object' && !Array.isArray(entry))) {
-      return `<div class="structured-field structured-array"><div class="structured-array-heading"><b>${escapeHtml(title)}</b><button type="button" class="text-action" data-editor-op="add" data-editor-path="${pathAttr}">＋ Add ${escapeHtml(key.endsWith('s') ? key.slice(0, -1) : key)}</button></div><div class="structured-array-list">${value.map((entry, entryIndex) => `<details class="structured-entry" open><summary><b>${escapeHtml(cardTitle(entry, entryIndex))}</b><span>ENTRY ${entryIndex + 1}</span></summary><div class="structured-entry-body">${Object.entries(entry).map(([childKey, childValue]) => renderValue(childValue, childKey, [...path, entryIndex, childKey], rootContent)).join('')}<div class="structured-entry-actions"><button type="button" class="text-action" data-editor-op="up" data-editor-path="${pathAttribute([...path, entryIndex])}" ${entryIndex === 0 ? 'disabled' : ''}>↑ Move up</button><button type="button" class="text-action" data-editor-op="down" data-editor-path="${pathAttribute([...path, entryIndex])}" ${entryIndex === value.length - 1 ? 'disabled' : ''}>↓ Move down</button><button type="button" class="text-action danger" data-editor-op="remove" data-editor-path="${pathAttribute([...path, entryIndex])}">Remove</button></div></div></details>`).join('')}</div></div>`;
+      return `<div class="structured-field structured-array"><div class="structured-array-heading"><b>${escapeHtml(title)}</b><button type="button" class="text-action" data-editor-op="add" data-editor-path="${pathAttr}">＋ Add ${escapeHtml(key.endsWith('s') ? key.slice(0, -1) : key)}</button></div><div class="structured-array-list">${value.map((entry, entryIndex) => `<details class="structured-entry"><summary><b>${escapeHtml(cardTitle(entry, entryIndex))}</b><span>ENTRY ${entryIndex + 1}</span></summary><div class="structured-entry-body">${Object.entries(entry).map(([childKey, childValue]) => renderValue(childValue, childKey, [...path, entryIndex, childKey], rootContent)).join('')}<div class="structured-entry-actions"><button type="button" class="text-action" data-editor-op="up" data-editor-path="${pathAttribute([...path, entryIndex])}" ${entryIndex === 0 ? 'disabled' : ''}>↑ Move up</button><button type="button" class="text-action" data-editor-op="down" data-editor-path="${pathAttribute([...path, entryIndex])}" ${entryIndex === value.length - 1 ? 'disabled' : ''}>↓ Move down</button><button type="button" class="text-action danger" data-editor-op="remove" data-editor-path="${pathAttribute([...path, entryIndex])}">Remove</button></div></div></details>`).join('')}</div></div>`;
     }
     const numeric = value.length > 0 && value.every(entry => typeof entry === 'number');
     return `<label class="structured-field"><span>${escapeHtml(title)}</span><input type="text" data-editor-path="${pathAttr}" data-editor-type="list${numeric ? '-number' : ''}" value="${escapeHtml(value.join(', '))}" placeholder="Comma-separated values"></label>`;
@@ -69,11 +71,17 @@ function renderValue(value, key, path, rootContent, parentArray = false, index =
 export function renderCatalogEditor(host, content, onlySection = null) {
   if (!host) return;
   const sections = onlySection ? [onlySection] : Object.keys(content);
-  host.innerHTML = sections.filter(key => Object.hasOwn(content, key)).map(key => {
+  const openEntries = new Set([...(host.querySelectorAll?.('.structured-entry[open]') || [])].map(entry => entry.querySelector('input[data-editor-path]')?.value));
+  const search = host.querySelector?.('[data-studio-search]')?.value || '';
+  host.innerHTML = catalogToolbar(content, onlySection) + sections.filter(key => Object.hasOwn(content, key)).map(key => {
     const value = content[key];
     const count = Array.isArray(value) ? ` · ${value.length} entries` : '';
     return `<details class="structured-section" open data-editor-section="${escapeHtml(key)}"><summary><strong>${escapeHtml(label(key))}</strong><span>${escapeHtml(key)}${count}</span></summary><div class="structured-section-body">${renderValue(value, key, [key], content)}${Array.isArray(value) && (!value.length || !value.every(entry => entry && typeof entry === 'object' && !Array.isArray(entry))) ? `<button type="button" class="button button-secondary" data-editor-op="add" data-editor-path="${pathAttribute([key])}">＋ Add ${escapeHtml(label(key).replace(/s$/, ''))}</button>` : ''}</div></details>`;
-  }).join('') || '<div class="panel-note">No editable catalog fields.</div>';
+  }).join('');
+  bindCatalogToolbar(host);
+  host.querySelectorAll?.('.structured-entry').forEach(entry => { entry.open = openEntries.has(entry.querySelector('input[data-editor-path]')?.value); });
+  const searchInput = host.querySelector?.('[data-studio-search]');
+  if (searchInput && search) { searchInput.value = search; searchInput.dispatchEvent(new Event('input')); }
 }
 
 export function catalogEntryTemplate(path, content) {
