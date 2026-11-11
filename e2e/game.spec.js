@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
 
+test.beforeEach(async ({ page }, testInfo) => {
+  if (!testInfo.title.startsWith('Brazilian Portuguese is the default')) {
+    await page.addInitScript(() => localStorage.setItem('scrapbound.language.v1', 'en'));
+  }
+});
+
 test('Laravel deep link serves the game and keeps navigation under the Wemp subpath', async ({ page, baseURL }) => {
   await page.goto(new URL('factory', baseURL).toString());
   await expect(page.locator('#factory-scene')).toBeVisible();
@@ -29,6 +35,7 @@ test('Blockly program can be assigned to and restored for one robot', async ({ p
     lastSeen: Date.now(), lifetimeCredits: 0,
   })));
   await page.goto(new URL('brains', baseURL).toString());
+  await expect(page.locator('#brain-status')).toHaveAttribute('data-editor-ready', 'true');
   const target = page.locator('#brain-deploy-target');
   await expect(target.locator('option[value="all"]')).toHaveCount(1);
   await expect(target.locator('option[value^="role:"]')).toHaveCount(7);
@@ -55,6 +62,25 @@ test('factory simulation exposes pause and speed controls', async ({ page, baseU
   await page.locator('#render-quality').selectOption('medium');
   await page.locator('#reduced-motion').check();
   await expect(page.locator('#reduced-motion')).toBeChecked();
+});
+
+test('Brazilian Portuguese is the default UI language and English remains selectable', async ({ page, baseURL }) => {
+  await page.goto(new URL('factory', baseURL).toString());
+  await expect(page.locator('html')).toHaveAttribute('lang', 'pt-BR');
+  await expect(page.locator('.nav-link[data-route="/factory"]')).toContainText('Fábrica');
+  await expect(page.locator('.resource-strip')).toContainText('CRÉDITOS LOCAIS');
+  await expect(page.locator('.resource-strip')).toContainText('ENTREGAS DOS ROBÔS');
+  await expect(page).toHaveTitle('Chão de fábrica — Scrapbound');
+
+  await page.locator('#language-select').selectOption('en');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(page.locator('.nav-link[data-route="/factory"]')).toContainText('Factory');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(page.locator('.nav-link[data-route="/factory"]')).toContainText('Factory');
+
+  await page.locator('#language-select').selectOption('pt-BR');
+  await expect(page.locator('.nav-link[data-route="/factory"]')).toContainText('Fábrica');
 });
 
 test('accelerated browser playtest earns resources from bot deliveries', async ({ page, baseURL }) => {
@@ -88,8 +114,10 @@ test('WebGL failure keeps the status UI usable and mobile layout within viewport
 
 test('custom keyboard profile drives only its assigned bot', async ({ page, baseURL }) => {
   await page.goto(new URL('brains', baseURL).toString());
+  await expect(page.locator('#control-mode')).toHaveAttribute('data-controls-ready', 'true');
   await expect(page.locator('#control-target option')).toHaveCount(1);
   await page.locator('#control-mode').selectOption('keyboard');
+  await expect(page.locator('[data-bind="up"]')).toBeVisible();
   await page.locator('[data-bind="up"]').click();
   await page.keyboard.press('i');
   await page.locator('#control-assign-profile').click();
@@ -221,6 +249,7 @@ test('signed-in player loads server jobs and persists programs and robot purchas
   await expect(page.locator('#battle-status')).toContainText('immutable defense snapshot');
   const defenderContext = await browser.newContext();
   const defenderPage = await defenderContext.newPage();
+  await defenderPage.addInitScript(() => localStorage.setItem('scrapbound.language.v1', 'en'));
   await defenderPage.goto(new URL('factory', baseURL).toString());
   await defenderPage.locator('#auth-button').click();
   await defenderPage.locator('#auth-mode').click();

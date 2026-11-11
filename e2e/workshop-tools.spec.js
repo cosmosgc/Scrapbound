@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.beforeEach(async ({ page }) => { await page.addInitScript(() => localStorage.setItem('scrapbound.language.v1', 'en')); });
 
 test('research defaults to the honeycomb tree with optional searchable cards', async ({ page }) => {
   await page.goto('./');

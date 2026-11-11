@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.beforeEach(async ({ page }) => { await page.addInitScript(() => localStorage.setItem('scrapbound.language.v1', 'en')); });
 
 test('factory shows the frontier and locked quarry in the Three.js view', async ({ page, baseURL }) => {
   await page.goto(new URL('factory', baseURL).toString());

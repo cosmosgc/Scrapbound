@@ -20,6 +20,8 @@ import { enhanceResearch } from './workshop-tools.js';
 import './workshop-tools.css';
 import { Operations, BuddyStyle } from './operations.js';
 import './operations.css';
+import { formatDate, formatNumber, installI18n } from './i18n.js';
+import './i18n.css';
 
 const economy = new Economy();
 const progression = new FactoryProgression(economy, () => render(), message => toast(message));
@@ -64,8 +66,9 @@ try {
   localStorage.setItem('scrapbound.deployed-programs.v1', JSON.stringify(simulation.assignments()));
 } catch { simulation.loadAssignments(); }
 const $ = id => document.getElementById(id);
+installI18n();
 document.getElementById('technology-view-host')?.append(document.querySelector('.technology-panel'));
-const compact = n => Intl.NumberFormat('en', { notation: n >= 10000 ? 'compact' : 'standard', maximumFractionDigits: n >= 1000 ? 1 : 0 }).format(Math.floor(n));
+const compact = n => formatNumber(Math.floor(n), { notation: n >= 10000 ? 'compact' : 'standard', maximumFractionDigits: n >= 1000 ? 1 : 0 });
 let missionBusy = false;
 let brainLoaded = false;
 let toastTimer;
@@ -195,7 +198,7 @@ function renderInventory(data) {
 
 function renderItemTrades(trades, players) {
   $('trade-recipient').innerHTML = players.length ? players.map(player => `<option value="${player.id}">${safe(player.username)}</option>`).join('') : '<option value="">No other pilots</option>';
-  $('trade-list').innerHTML = trades.length ? trades.map(trade => `<article class="battle-entry"><div><b>${safe(trade.seller)} offers ${trade.quantity} ${safe(trade.item_name)}</b><span>${safe(trade.recipient)} · ${trade.credit_price} credits · ${safe(trade.status)}</span><small>${trade.status === 'open' ? `Expires ${new Date(trade.expires_at).toLocaleString()}` : `Trade #${trade.id}`}</small></div><div>${trade.can_accept ? `<button class="button button-primary" data-trade-accept="${trade.id}">Accept</button><button class="button button-secondary" data-trade-decline="${trade.id}">Decline</button>` : ''}${trade.can_cancel ? `<button class="button button-secondary" data-trade-cancel="${trade.id}">Cancel</button>` : ''}</div></article>`).join('') : '<div class="panel-note">No item trade offers yet.</div>';
+  $('trade-list').innerHTML = trades.length ? trades.map(trade => `<article class="battle-entry"><div><b>${safe(trade.seller)} offers ${trade.quantity} ${safe(trade.item_name)}</b><span>${safe(trade.recipient)} · ${trade.credit_price} credits · ${safe(trade.status)}</span><small>${trade.status === 'open' ? `Expires ${formatDate(trade.expires_at, { dateStyle: 'short', timeStyle: 'short' })}` : `Trade #${trade.id}`}</small></div><div>${trade.can_accept ? `<button class="button button-primary" data-trade-accept="${trade.id}">Accept</button><button class="button button-secondary" data-trade-decline="${trade.id}">Decline</button>` : ''}${trade.can_cancel ? `<button class="button button-secondary" data-trade-cancel="${trade.id}">Cancel</button>` : ''}</div></article>`).join('') : '<div class="panel-note">No item trade offers yet.</div>';
   for (const [attribute, action] of [['data-trade-accept', 'item_trade_accept'], ['data-trade-decline', 'item_trade_decline'], ['data-trade-cancel', 'item_trade_cancel']]) {
     $('trade-list').querySelectorAll(`[${attribute}]`).forEach(button => button.addEventListener('click', async () => {
       button.disabled = true;
@@ -237,7 +240,7 @@ function applyServerJobs(data) {
   if (data.wallet) {
     economy.state.credits = data.wallet.credits;
     economy.state.scrap = data.wallet.scrap;
-    walletSyncStatus = `Server wallet loaded · ${new Date().toLocaleTimeString()}`;
+    walletSyncStatus = `Server wallet loaded · ${formatDate(new Date(), { timeStyle: 'short' })}`;
     if (account && localSimulationAccount !== account.username) {
       localSimulationValues = { credits: Number(data.wallet.credits), scrap: Number(data.wallet.scrap) };
       localSimulationAccount = account.username;
@@ -341,7 +344,7 @@ async function syncServerWallet() {
     economy.state.credits = Number(result.wallet.credits);
     economy.state.scrap = Number(result.wallet.scrap);
     lastWalletSyncAt = Date.now();
-    walletSyncStatus = `Server wallet synced · ¢${compact(economy.state.credits)} · ▧${compact(economy.state.scrap)} · ${new Date(lastWalletSyncAt).toLocaleTimeString()}`;
+    walletSyncStatus = `Server wallet synced · ¢${compact(economy.state.credits)} · ▧${compact(economy.state.scrap)} · ${formatDate(new Date(lastWalletSyncAt), { timeStyle: 'short' })}`;
   } catch (error) {
     walletSyncStatus = `Wallet sync failed: ${error.message || 'network error'}`;
   } finally {
@@ -551,7 +554,7 @@ async function runServerSimulation() {
     if (result.wallet) {
       economy.state.credits = result.wallet.credits; economy.state.scrap = result.wallet.scrap;
       serverSimulationStatus = '';
-      walletSyncStatus = `Server wallet synced · ${new Date().toLocaleTimeString()}`;
+      walletSyncStatus = `Server wallet synced · ${formatDate(new Date(), { timeStyle: 'short' })}`;
       lastWalletSyncAt = Date.now();
       render();
     }
@@ -1198,7 +1201,7 @@ function renderServerMissions() {
     const disabled = missionBusy || (activeRun ? !ready : (!!active || locked || Number(state.crew_count) < Number(contract.crew_required)));
     const cooperativeRun = activeRun && active.cooperative_job_id;
     const selectedCoop = Number(selectedCooperativeJobId) > 0 && Number(state.cooperative_jobs?.find(job => Number(job.id) === Number(selectedCooperativeJobId))?.sector) === sector;
-    return `<article class="mission-card ${locked ? 'mission-locked' : ''}"><div class="mission-index">${String(sector).padStart(2, '0')}</div><div class="mission-main"><div class="eyebrow">${cooperativeRun ? 'CO-OP CREW DEPLOYED' : activeRun ? 'CREW DEPLOYED' : locked ? 'FRONTIER SIGNAL' : 'AVAILABLE CONTRACT'}</div><h3>${['Dustline salvage', 'Rusted relay', 'The green vault'][titleIndex]}</h3><p>${activeRun ? `Your ${state.crew_count} programmed robot(s) are on a server-timed ${contract.duration_seconds}-second deployment${cooperativeRun ? ' for the shared co-op contract' : ''}.` : ['Recover abandoned alloys from the outer debris field.', 'Search a collapsed comms station for usable components.', 'An overgrown depot may still have intact machine parts.'][titleIndex]}${selectedCoop && !activeRun ? ' · Selected co-op job contribution' : ''}</p><div class="mission-rewards"><span>${activeRun ? `COMPLETES ${new Date(active.completes_at).toLocaleTimeString()}` : `~${contract.duration_seconds}s`}</span><b>¢ ${rewards.credits}</b><b>▧ ${rewards.scrap}</b></div></div><button class="button ${locked ? 'button-secondary' : 'button-primary'} mission-launch" data-server-mission="${sector}" ${activeRun ? `data-mission-claim="${safe(active.run_key)}"` : ''} ${disabled ? 'disabled' : ''}>${actionText} <span>→</span></button></article>`;
+    return `<article class="mission-card ${locked ? 'mission-locked' : ''}"><div class="mission-index">${String(sector).padStart(2, '0')}</div><div class="mission-main"><div class="eyebrow">${cooperativeRun ? 'CO-OP CREW DEPLOYED' : activeRun ? 'CREW DEPLOYED' : locked ? 'FRONTIER SIGNAL' : 'AVAILABLE CONTRACT'}</div><h3>${['Dustline salvage', 'Rusted relay', 'The green vault'][titleIndex]}</h3><p>${activeRun ? `Your ${state.crew_count} programmed robot(s) are on a server-timed ${contract.duration_seconds}-second deployment${cooperativeRun ? ' for the shared co-op contract' : ''}.` : ['Recover abandoned alloys from the outer debris field.', 'Search a collapsed comms station for usable components.', 'An overgrown depot may still have intact machine parts.'][titleIndex]}${selectedCoop && !activeRun ? ' · Selected co-op job contribution' : ''}</p><div class="mission-rewards"><span>${activeRun ? `COMPLETES ${formatDate(new Date(active.completes_at), { timeStyle: 'short' })}` : `~${contract.duration_seconds}s`}</span><b>¢ ${rewards.credits}</b><b>▧ ${rewards.scrap}</b></div></div><button class="button ${locked ? 'button-secondary' : 'button-primary'} mission-launch" data-server-mission="${sector}" ${activeRun ? `data-mission-claim="${safe(active.run_key)}"` : ''} ${disabled ? 'disabled' : ''}>${actionText} <span>→</span></button></article>`;
   }).join('');
 
   document.querySelectorAll('[data-server-mission]').forEach(button => button.addEventListener('click', async () => {

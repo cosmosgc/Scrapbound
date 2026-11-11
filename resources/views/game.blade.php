@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -24,7 +24,7 @@
         <div class="sidebar-bottom"><div class="online-dot"></div><span>LOCAL SIMULATION</span><small>SYNC: BROWSER SAVE</small></div>
       </aside>
       <main class="main-area">
-        <header class="topbar"><div><div class="eyebrow">FRONTIER SECTOR 07 <span>•</span> CYCLE <b id="cycle-label">01</b></div><h1 id="page-title">Factory floor</h1></div><div class="top-actions"><span class="save-state"><i></i> <span id="save-label">Saved locally</span></span><button class="button button-account" id="auth-button">Sign in</button><button class="icon-button" id="settings-button" title="Settings">⚙</button></div></header>
+        <header class="topbar"><div><div class="eyebrow">FRONTIER SECTOR 07 <span>•</span> CYCLE <b id="cycle-label">01</b></div><h1 id="page-title">Factory floor</h1></div><div class="top-actions"><span class="save-state"><i></i> <span id="save-label">Saved locally</span></span><label class="language-picker"><span aria-hidden="true">🌐</span><select id="language-select" aria-label="Language"><option value="pt-BR">Português (Brasil)</option><option value="en">English</option></select></label><button class="button button-account" id="auth-button">Sign in</button><button class="icon-button" id="settings-button" title="Settings">⚙</button></div></header>
         <section class="resource-strip" aria-label="Resources">
           <div class="resource"><span class="resource-symbol coin">¢</span><div><small class="server-value hidden" id="credits-server">SERVER ¢0</small><small>LOCAL CREDITS</small><strong id="credits">0</strong></div><em id="credits-rate">JOB DELIVERIES</em></div>
           <div class="resource"><span class="resource-symbol scrap">▧</span><div><small class="server-value hidden" id="scrap-server">SERVER ▧0</small><small>LOCAL SCRAP</small><strong id="scrap">0</strong></div><em id="scrap-rate">JOB DELIVERIES</em></div>

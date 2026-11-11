@@ -34,6 +34,7 @@ On Windows, run `build.bat` to install Composer/npm dependencies, build assets i
 - Technology-unlocked bot roles, resource zones, and production modifiers
 - Admin Catalog Studio with structured resource/technology editing and a draggable, saved honeycomb layout for technology nodes
 - Laravel sign-in, server-authoritative wallets/inventory, escrow item-for-credit trades, and a community board for help, negotiation posts, replies, and collaboration
+- Brazilian Portuguese is the default interface language; English is selectable and remembered per browser
 
 ## Enable accounts and community
 
@@ -44,3 +45,5 @@ On Windows, run `build.bat` to install Composer/npm dependencies, build assets i
 Community trade posts are negotiation offers only. Targeted item trades reserve catalog-tradable inventory, then atomically exchange items and credits when the named recipient accepts. The server checks each offer's expiry timestamp when trade offers are viewed or acted on, so no background scheduler is needed for escrow release. Replies are public to anyone who can access the board. Use unique passwords and do not post personal contact information.
 
 See the current [voxel mining and bot-role guide](docs/VOXEL_MINING.md), [game plan](docs/GAMEPLAN.md), [expansion plan](docs/EXPANSION_PLAN.md), [development queue](docs/DEVELOPMENT_QUEUE.md), [working backlog](docs/BACKLOG.md), and [installed libraries](docs/SUGGESTED_LIBRARIES.md), including the [trade-off evaluation](docs/SUGGESTED_LIBRARIES_EVALUATION.md) and separate package notes.
+
+See [internationalization](docs/INTERNATIONALIZATION.md) for locale defaults and translation conventions.

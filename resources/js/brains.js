@@ -150,6 +150,8 @@ export function createBrainWorkshop() {
   document.getElementById('load-template').addEventListener('click', () => {
     loadTemplate(workspace); nameInput.value = 'Salvage scout'; document.getElementById('brain-name').textContent = nameInput.value;
   });
+  document.getElementById('brain-status').dataset.editorReady = 'true';
+  document.getElementById('control-mode').dataset.controlsReady = 'true';
   return workspace;
 }
 

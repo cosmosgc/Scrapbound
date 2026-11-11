@@ -1,2 +1,3 @@
 import {test,expect} from '@playwright/test';
+test.beforeEach(async ({ page }) => { await page.addInitScript(() => localStorage.setItem('scrapbound.language.v1', 'en')); });
 test('factory shows contracts and a cosmetic-only buddy shop',async({page})=>{await page.goto('./');const contract=page.locator('#factory-contract');await expect(contract).toContainText('FACTORY CONTRACT');await expect(contract).toContainText('Deliver 4 cargo units');const shop=page.locator('#buddy-style-shop');await expect(shop).toContainText('Builder cap');await expect(shop).toContainText('Just for fun');await shop.getByLabel('Robot buddy paint').selectOption('ocean');await expect(shop.getByLabel('Robot buddy paint')).toHaveValue('ocean');await expect(shop).toContainText('COSMETIC ONLY');});
