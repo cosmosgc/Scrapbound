@@ -21,6 +21,7 @@ test('structured catalog editor exposes modular sections and technology effect c
   assert.match(host.innerHTML, /data-effect-choice/);
   assert.doesNotMatch(host.innerHTML, /Add effect</);
   assert.match(host.innerHTML, /Unlock capabilities/);
+  assert.match(host.innerHTML, /Offline time bonus/);
   assert.match(host.innerHTML, /Choose a prerequisite to add/);
   assert.match(host.innerHTML, /data-prerequisite-choice/);
   assert.doesNotMatch(host.innerHTML, /Add prerequisite/);
@@ -43,6 +44,9 @@ test('technology effect picker adds typed list and map effects, and prerequisite
   assert.deepEqual(content.technologyNodes[0].effects.unlockPrograms, ['salvage_route']);
   assert.deepEqual(content.technologyNodes[0].effects.stockMultipliers, { resource_id: 1.5, alloy: 1.5 });
   assert.deepEqual(content.technologyNodes[1].prerequisites, ['survey']);
+
+  assert.equal(mutateTechnologyEffect(content, ['technologyNodes', 0, 'effects'], 'add-effect', 'offlineSecondsBonus'), true);
+  assert.equal(content.technologyNodes[0].effects.offlineSecondsBonus, 0);
 });
 
 test('structured editor path updates and repeatable catalog arrays stay data-driven', () => {

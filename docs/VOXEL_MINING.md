@@ -8,7 +8,7 @@ This document describes the current field-mining implementation. Product directi
 - Each block has a resource type, stock/remaining durability, and a respawn timer. Ground robots cannot pass through live blocks; miners approach a clear side to work them. The Skydrill is airborne and ignores ground-block collision.
 - Breaking a block removes its solid voxel model and spawns a separate resource pile at that location. The standard drop quantity is `ceil(block stock / 3)`, with a minimum of one unit. A drop remains available until a bot picks it up.
 - A bot reserves its current block or pile. Other bots skip reserved entities, so a resource target is not shared. Miners and haulers have different target pools: miners choose blocks; haulers choose drops.
-- If local steering cannot make progress toward a target, the bot releases it and selects another. This is bounded local steering/avoidance, not a global A* path planner.
+- Ground bots follow cached deterministic 0.5-unit grid routes around fixed props, unlocked structures, and live blocks. Route planning has a fixed field bound and neighbor order; dynamic robot spacing still applies at each step. If a route becomes blocked or makes no progress, the bot replans or releases its target rather than creating cargo or rewards.
 - Blocks normally respawn after **60 seconds**. Field Refinery applies the alloy restock multiplier, making alloy blocks respawn in 30 seconds. Depleted cells display a live seconds countdown in the Three.js scene and the 2D fallback.
 
 ## Automatic roles

@@ -86,6 +86,26 @@ class RobotSimulationApiTest extends TestCase
         $this->assertSame('idle', $result['robots'][0]['phase']);
     }
 
+    public function test_server_grid_route_matches_the_client_fixed_step_waypoint_sample(): void
+    {
+        $result = app(RobotSimulationResolver::class)->resolve(
+            ['scavenger' => 1, 'scrap_hound' => 0, 'fabricator' => 0],
+            ['crew' => [['action' => 'move_to', 'x' => -9, 'z' => 2]], 'units' => []],
+            7,
+            30,
+        );
+
+        $this->assertEqualsWithDelta(-5.5, $result['robots'][0]['x'], .000001);
+        $this->assertEqualsWithDelta(.5, $result['robots'][0]['z'], .000001);
+        $replay = app(RobotSimulationResolver::class)->resolve(
+            ['scavenger' => 1, 'scrap_hound' => 0, 'fabricator' => 0],
+            ['crew' => [['action' => 'move_to', 'x' => -9, 'z' => 2]], 'units' => []],
+            7,
+            30,
+        );
+        $this->assertSame($result, $replay);
+    }
+
     public function test_server_skips_an_impossible_obstacle_blocked_waypoint_without_creating_cargo(): void
     {
         $result = app(RobotSimulationResolver::class)->resolve(
@@ -222,7 +242,7 @@ class RobotSimulationApiTest extends TestCase
         $first = $this->actingAs($user)->postJson('/api.php?action=robot_simulate', $payload)
             ->assertOk()->assertJsonPath('replayed', false);
         $this->assertCount(1, $first->json('snapshot.robots'));
-        $this->assertSame(5, $first->json('core_version'));
+        $this->assertSame(6, $first->json('core_version'));
         $this->assertNotEmpty($first->json('payouts'));
         $this->assertSame(['scrap'], array_values(array_unique(array_column($first->json('payouts'), 'resource'))));
         $expectedScrap = 18 + array_sum(array_column($first->json('payouts'), 'amount'));

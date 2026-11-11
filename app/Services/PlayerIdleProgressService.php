@@ -32,9 +32,13 @@ class PlayerIdleProgressService
             $now = now();
             $elapsed = max(0, $now->getTimestamp() - $state->last_settled_at->getTimestamp());
             $ticksPerSecond = max(1, (int) config('idle_progress.ticks_per_second', 10));
-            $maxSeconds = max(0, (int) config('idle_progress.max_offline_seconds', 14400));
+            $technologyEffects = $this->technology->effectsFor($user);
+            $baseMaxSeconds = max(0, (int) config('idle_progress.max_offline_seconds', 14400));
+            $hardMaxSeconds = max(0, (int) config('idle_progress.hard_max_offline_seconds', 28800));
+            $maxSeconds = min($hardMaxSeconds, $baseMaxSeconds + (int) ($technologyEffects['offlineSecondsBonus'] ?? 0));
             $maxTicks = max(0, (int) config('idle_progress.max_ticks', $maxSeconds * $ticksPerSecond));
-            $creditedSeconds = min($elapsed, $maxSeconds, (int) floor($maxTicks / $ticksPerSecond));
+            $maxSeconds = min($maxSeconds, (int) floor($maxTicks / $ticksPerSecond));
+            $creditedSeconds = min($elapsed, $maxSeconds);
             $ticks = min($maxTicks, $creditedSeconds * $ticksPerSecond);
 
             $jobState = $this->jobs->jobs($user);
@@ -53,7 +57,7 @@ class PlayerIdleProgressService
                 [],
                 $activeCatalog['rewards'],
                 $activeCatalog['resources'],
-                $this->technology->effectsFor($user),
+                $technologyEffects,
             );
 
             $groups = [];
@@ -93,6 +97,7 @@ class PlayerIdleProgressService
                 'world_seed' => (int) $state->world_seed,
                 'elapsed_seconds' => $elapsed,
                 'credited_seconds' => $creditedSeconds,
+                'offline_cap_seconds' => $maxSeconds,
                 'capped' => $elapsed > $creditedSeconds,
                 'ticks' => $ticks,
                 'payouts' => array_values($groups),

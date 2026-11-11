@@ -109,10 +109,12 @@ class TechnologyTreeService
         $listKeys = ['unlockResources', 'unlockZones', 'unlockCapabilities', 'unlockPrograms', 'unlockModules', 'unlockBotKinds', 'sceneUnlocks'];
         $merged = array_fill_keys($listKeys, []);
         $merged += ['spawnWeightMultipliers' => [], 'deliveryValueMultipliers' => [], 'stockMultipliers' => [], 'respawnTimeMultipliers' => []];
+        $merged['offlineSecondsBonus'] = 0;
         foreach ($effectSets as $effects) {
             foreach ($listKeys as $listKey) {
                 $merged[$listKey] = array_values(array_unique([...$merged[$listKey], ...($effects[$listKey] ?? [])]));
             }
+            $merged['offlineSecondsBonus'] = min(14400, $merged['offlineSecondsBonus'] + (int) ($effects['offlineSecondsBonus'] ?? 0));
             foreach (['spawnWeightMultipliers', 'deliveryValueMultipliers', 'stockMultipliers', 'respawnTimeMultipliers'] as $mapKey) {
                 foreach ($effects[$mapKey] ?? [] as $resourceId => $multiplier) {
                     $merged[$mapKey][$resourceId] = max(.1, min(5, ($merged[$mapKey][$resourceId] ?? 1) * (float) $multiplier));

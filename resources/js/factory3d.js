@@ -8,7 +8,7 @@ import { box, label, createRobot, disposeObject, resourceColor, BOT_COLORS } fro
 export class FactoryScene {
   constructor(host, { reducedMotion = false, quality = 'high' } = {}) {
     this.host = host; this.reducedMotion = reducedMotion; this.quality = quality;
-    this.bots = []; this.dropMeshes = new Map(); this.technologyMeshes = new Map(); this.technologyUnlocks = new Set();
+    this.bots = []; this.dropMeshes = new Map(); this.technologyMeshes = new Map(); this.technologyUnlocks = new Set(); this.unlockedZones = new Set();
     this.followId = null; this.selectedId = null; this.lastDeliveryId = 0; this.effects = []; this.snapshot = null;
     this.scene = new THREE.Scene(); this.scene.background = new THREE.Color('#b8e5fb'); this.scene.fog = new THREE.Fog('#b8e5fb', 48, 100);
     this.camera = new THREE.PerspectiveCamera(42, 1, .1, 140);
@@ -29,6 +29,7 @@ export class FactoryScene {
     const views = document.createElement('div'); views.className = 'world-view-controls';
     views.innerHTML = '<button type="button" data-view="overview">Island view</button><button type="button" data-view="close">Close-up</button><button type="button" data-view="top">Top view</button><small>Right-drag to pan · pinch to zoom</small>';
     host.append(views);
+    this.addZoneStatus(host);
     this.resourceInfo = document.createElement('div'); this.resourceInfo.className = 'world-resource-info'; this.resourceInfo.hidden = true; host.append(this.resourceInfo);
     views.addEventListener('click', event => {
       const view = event.target.closest('[data-view]')?.dataset.view; if (!view) return;
@@ -73,7 +74,20 @@ export class FactoryScene {
       box(this.scene,[.22,.65,.22],[x,.34,z],'#bd926a');
       const crown=new THREE.Mesh(new THREE.IcosahedronGeometry(.65+(i%3)*.1,0),new THREE.MeshStandardMaterial({color:i%4 ? '#54b789':'#f6c579',flatShading:true})); crown.position.set(x,1.05,z); crown.castShadow=true; this.scene.add(crown);
     }
-    for (const [text,x,z] of [['SCRAP GARDEN',-11,-10.5],['SUNNY QUARRY',11,10.5]]) { const sign=label(text); sign.position.set(x,2,z); this.scene.add(sign); }
+    for (const [text,x,z] of [['SCRAP GARDEN',-11,-10.5],['QUARRY SECTOR',11,10.5]]) { const sign=label(text); sign.position.set(x,2,z); this.scene.add(sign); }
+    const quarryFill = new THREE.Mesh(new THREE.PlaneGeometry(8, 6), new THREE.MeshStandardMaterial({
+      color: '#b7773f', roughness: 1, transparent: true, opacity: .11, depthWrite: false,
+    }));
+    quarryFill.rotation.x = -Math.PI / 2; quarryFill.position.set(11, .04, 8); this.scene.add(quarryFill);
+    const quarryEdgeMaterial = new THREE.MeshBasicMaterial({ color: '#bc8754', transparent: true, opacity: .58, depthWrite: false });
+    const quarryEdges = [
+      [[8, .07, .09], [11, .07, 5]], [[8, .07, .09], [11, .07, 11]],
+      [[.09, .07, 6], [7, .07, 8]], [[.09, .07, 6], [15, .07, 8]],
+    ].map(([size, position]) => {
+      const edge = new THREE.Mesh(new THREE.BoxGeometry(...size), quarryEdgeMaterial);
+      edge.position.set(...position); this.scene.add(edge); return edge;
+    });
+    this.quarryOverlay = { fill: quarryFill, edgeMaterial: quarryEdgeMaterial, edges: quarryEdges };
     this.selectionRing=new THREE.Mesh(new THREE.TorusGeometry(.8,.065,8,40),new THREE.MeshBasicMaterial({color:'#fff273',depthTest:false}));
     this.selectionRing.rotation.x=-Math.PI/2; this.selectionRing.renderOrder=8; this.selectionRing.visible=false; this.scene.add(this.selectionRing);
     const routeGeometry = new THREE.BufferGeometry();
@@ -98,7 +112,7 @@ export class FactoryScene {
   }
   setSimulation(snapshot) {
     this.snapshot=snapshot;
-    this.host.setAttribute('aria-label',`Live factory: ${snapshot.robots.length} robots, ${snapshot.nodes.length} resource blocks, ${(snapshot.drops||[]).length} dropped resource piles.`);
+    this.updateAccessibleLabel();
     if(!this.available){this.drawFallback();return;}
     this.setRobots(snapshot.robots);
     const nodes=snapshot.nodes;
@@ -144,12 +158,12 @@ export class FactoryScene {
     if(this.dragged)return;
     const rect=this.renderer.domElement.getBoundingClientRect(),pointer=new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1,-(event.clientY-rect.top)/rect.height*2+1);
     const ray=new THREE.Raycaster();ray.setFromCamera(pointer,this.camera);
+    const point=ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),0),new THREE.Vector3());
+    if(point)this.onGroundClick?.(point.x,point.z);
     const hits=ray.intersectObjects(this.bots,true).filter(hit=>hit.object.type!=='Sprite');
     if(hits.length){let bot=hits[0].object;while(bot.parent&&!this.bots.includes(bot))bot=bot.parent;this.selectedId=bot.userData.id;this.selectedResource=null;this.resourceInfo.hidden=true;this.onBotSelect?.(this.selectedId);return;}
     const resourceHit = this.ore ? ray.intersectObject(this.ore)[0] : null;
     this.selectedResource = resourceHit ? this.snapshot?.nodes[resourceHit.instanceId]?.id : null;
-    const point=ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),0),new THREE.Vector3());
-    if(point)this.onGroundClick?.(point.x,point.z);
   }
   setBuddyStyle(color='mint', cosmetics=[]) {
     if(!this.available)return;
@@ -157,8 +171,42 @@ export class FactoryScene {
     const tint=palette[color]||palette.mint,owned=new Set(cosmetics);
     for(const bot of this.bots){const d=bot.userData;d.chassis.material.color.set(tint);d.cap.visible=owned.has('cap');d.star.visible=owned.has('antenna');d.trail.visible=owned.has('trail');}
   }
-  setTechnology(unlocks=[]) {
-    this.technologyUnlocks=new Set(unlocks);if(!this.available)return;
+  addZoneStatus(host) {
+    this.zoneStatus = document.createElement('div');
+    this.zoneStatus.className = 'world-zone-status';
+    this.zoneStatus.setAttribute('role', 'status');
+    this.zoneStatus.setAttribute('aria-live', 'polite');
+    host.append(this.zoneStatus);
+    this.renderZoneStatus();
+  }
+  renderZoneStatus() {
+    if (!this.zoneStatus) return;
+    const quarryOpen = this.unlockedZones.has('quarry');
+    this.zoneStatus.innerHTML = `<span class="world-zone-chip world-zone-open"><b>FRONTIER</b><small>OPEN</small></span><span class="world-zone-chip ${quarryOpen ? 'world-zone-open' : 'world-zone-locked'}"><b>QUARRY</b><small>${quarryOpen ? 'SURVEYED' : 'LOCKED · REQUIRES GEOLOGICAL SURVEY'}</small></span>`;
+  }
+  updateAccessibleLabel() {
+    const quarryState = this.unlockedZones.has('quarry') ? 'surveyed and open' : 'locked; requires Geological Survey';
+    const summary = this.snapshot
+      ? `Live factory: ${this.snapshot.robots.length} robots, ${this.snapshot.nodes.length} resource blocks, ${(this.snapshot.drops || []).length} dropped resource piles.`
+      : 'Interactive factory.';
+    const sampleSite = this.snapshot?.nodes?.[0];
+    const siteLabel = sampleSite ? ` First site: ${sampleSite.resource} site at x ${sampleSite.x}, z ${sampleSite.z}.` : '';
+    this.host?.setAttribute('aria-label', `${summary}${siteLabel} Field zones: Frontier open; Quarry ${quarryState}.`);
+    this.fallbackCanvas?.setAttribute('aria-label', `Interactive factory map. Frontier open. Quarry ${quarryState}.`);
+  }
+  setTechnology(unlocks=[], zones=[]) {
+    this.technologyUnlocks=new Set(unlocks); this.unlockedZones = new Set(zones); this.renderZoneStatus();
+    this.updateAccessibleLabel();
+    if (!this.available) {
+      this.drawFallback(); return;
+    }
+    const active = this.unlockedZones.has('quarry');
+    if (this.quarryOverlay) {
+      this.quarryOverlay.fill.material.opacity = active ? .28 : .11;
+      this.quarryOverlay.fill.material.color.set(active ? '#b9793d' : '#a9b69b');
+      this.quarryOverlay.edgeMaterial.color.set(active ? '#f0b66c' : '#bc8754');
+      this.quarryOverlay.edgeMaterial.opacity = active ? .96 : .58;
+    }
     for(const [id,mesh]of this.technologyMeshes)mesh.visible=this.technologyUnlocks.has(id);
     for(const [id,x,color]of [['survey_beacon',-2.8,'#8fd3bd'],['refinery',2.8,'#b7a0ed']]){
       if(this.technologyMeshes.has(id))continue;
@@ -206,13 +254,19 @@ export class FactoryScene {
   setupFallback(){
     this.available=false;this.host.innerHTML='<div class="scene-fallback"><b>Factory map · 2D mode</b><canvas class="scene-fallback-canvas" aria-label="Interactive factory map"></canvas><span>Your robots keep working. Select a bot on the map or in the inspector.</span></div>';
     this.fallbackCanvas=this.host.querySelector('canvas');this.fallbackContext=this.fallbackCanvas.getContext('2d');
-    this.fallbackCanvas.addEventListener('click',e=>{const r=this.fallbackCanvas.getBoundingClientRect(),s=Math.min(r.width/38,r.height/26);const x=(e.clientX-r.left-r.width/2)/s,z=(e.clientY-r.top-r.height/2)/s;const bot=this.snapshot?.robots.find(b=>Math.hypot(b.x-x,b.z-z)<.9);if(bot){this.selectedId=bot.id;this.onBotSelect?.(bot.id);this.drawFallback();}else this.onGroundClick?.(x,z);});
+    this.addZoneStatus(this.host);
+    this.fallbackCanvas.addEventListener('click',e=>{const r=this.fallbackCanvas.getBoundingClientRect(),s=Math.min(r.width/38,r.height/26);const x=(e.clientX-r.left-r.width/2)/s,z=(e.clientY-r.top-r.height/2)/s;this.onGroundClick?.(x,z);const bot=this.snapshot?.robots.find(b=>Math.hypot(b.x-x,b.z-z)<.9);if(bot){this.selectedId=bot.id;this.onBotSelect?.(bot.id);this.drawFallback();}});
     this.resizeObserver=new ResizeObserver(()=>this.resize());this.resizeObserver.observe(this.host);this.resize();
   }
   drawFallback(){
     const ctx=this.fallbackContext,snapshot=this.snapshot;if(!ctx||!snapshot)return;
     const w=this.fallbackCanvas.width,h=this.fallbackCanvas.height,s=Math.min(w/38,h/26),x=v=>w/2+v*s,z=v=>h/2+v*s;
-    ctx.fillStyle='#b8e5fb';ctx.fillRect(0,0,w,h);ctx.fillStyle='#a4d9a4';ctx.fillRect(x(-18),z(-12),36*s,24*s);ctx.fillStyle='#eaf2fc';ctx.fillRect(x(-5),z(-3),10*s,6*s);
+    ctx.fillStyle='#b8e5fb';ctx.fillRect(0,0,w,h);ctx.fillStyle='#a4d9a4';ctx.fillRect(x(-18),z(-12),36*s,24*s);
+    const quarryOpen=this.unlockedZones.has('quarry');
+    ctx.fillStyle=quarryOpen?'rgba(185,121,61,.28)':'rgba(169,182,155,.12)';ctx.fillRect(x(7),z(5),8*s,6*s);
+    ctx.strokeStyle=quarryOpen?'#f0b66c':'#bc8754';ctx.lineWidth=quarryOpen?2.5:1.5;ctx.setLineDash(quarryOpen?[]:[5,4]);ctx.strokeRect(x(7),z(5),8*s,6*s);ctx.setLineDash([]);
+    ctx.fillStyle=quarryOpen?'#64431f':'#635d4f';ctx.font='bold 11px sans-serif';ctx.textAlign='center';ctx.fillText(quarryOpen?'QUARRY · OPEN':'QUARRY · LOCKED',x(11),z(8));
+    ctx.fillStyle='#eaf2fc';ctx.fillRect(x(-5),z(-3),10*s,6*s);
     for(const node of snapshot.nodes){ctx.fillStyle=node.remaining?resourceColor(node.resource):'#d7e4ce';ctx.fillRect(x(node.x)-.6*s,z(node.z)-.6*s,1.2*s,1.2*s);}
     for(const drop of snapshot.drops||[]){ctx.fillStyle=resourceColor(drop.resource);ctx.fillRect(x(drop.x)-.2*s,z(drop.z)-.2*s,.4*s,.4*s);}
     for(const bot of snapshot.robots){ctx.beginPath();ctx.fillStyle=BOT_COLORS[bot.kind]||'#58cc91';ctx.arc(x(bot.x),z(bot.z),.45*s,0,Math.PI*2);ctx.fill();ctx.strokeStyle=bot.id===this.selectedId?'#ffec72':'#395779';ctx.lineWidth=bot.id===this.selectedId?4:1;ctx.stroke();ctx.fillStyle='#253d60';ctx.font='bold 11px sans-serif';ctx.textAlign='center';ctx.fillText(String(bot.id+1),x(bot.x),z(bot.z)+3);}

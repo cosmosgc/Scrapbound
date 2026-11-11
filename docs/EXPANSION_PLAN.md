@@ -1,6 +1,6 @@
 # Scrapbound Expansion Plan
 
-> **Status (2026-11-09):** The larger-world foundation is implemented, including the central depot, a 136-block voxel field, automatic miner/hauler roles, separate resource drops, target reservations, countdowns, technology unlocks, Catalog Studio editing, and obstacle-aware local steering. See [VOXEL_MINING.md](VOXEL_MINING.md) for current behavior. Remaining items below are future expansion proposals; see [DEVELOPMENT_QUEUE.md](DEVELOPMENT_QUEUE.md) for completed implementation work.
+> **Status (2026-11-11):** The larger-world foundation is implemented, including the central depot, a 136-block voxel field, automatic miner/hauler roles, separate resource drops, target reservations, countdowns, technology unlocks, Catalog Studio editing, obstacle-aware steering, technology-extended offline progress, and visible frontier/quarry zones. SB-055 adds deterministic grid path planning. See [VOXEL_MINING.md](VOXEL_MINING.md) for current behavior and [DEVELOPMENT_QUEUE.md](DEVELOPMENT_QUEUE.md) for execution status.
 
 ## Product goal
 
@@ -47,7 +47,7 @@ The incremental loop should come from bots doing visible, understandable work—
 - Offline simulation uses the same seeded grid sites, stock/respawn, cargo, navigation, and central depot rules as online play. Unreturned cargo is not paid; a bot only earns when the resolver records its arrival/delivery at storage.
 - Settle all currency changes and advance the last-settled timestamp atomically. Repeated requests, concurrent tabs, retries, and stale timestamps cannot pay twice or skip time; store an idempotent settlement receipt.
 - Apply explicit caps to offline duration, simulated steps, crew processed, total rewards, and resolver work. Show the player elapsed time credited, capped time, deliveries, and any cargo still in transit.
-- Give a small starter offline cap, then let technology nodes extend the cap or efficiency within a published server-defined maximum. Avoid claiming progress beyond the cap.
+- Give a small starter offline cap, then let technology nodes extend the cap or efficiency within a published server-defined maximum. SB-054 implements the first extension: Remote Operations adds one hour to the four-hour base cap, up to a fixed eight-hour ceiling.
 - Guest saves may simulate while open and store their own local snapshot, but must not create signed-in/server currencies.
 
 ### Acceptance checks
@@ -156,7 +156,7 @@ All changes must be admin-authorized on the server. Provide draft editing, schem
 1. **World and delivery contract:** decide world bounds, grid geometry, central depot semantics, deterministic seed format, and cargo/delivery events.
 2. **Large scene and seeded resource sites:** implement random valid grid-cell selection and visualize stock, reachability, and depot deliveries.
 3. **Incremental/offline settlement:** persist server world/time state, resolve bounded away-time work, and settle only depot deliveries with idempotent receipts.
-4. **Deterministic bot avoidance:** SB-051 implements dynamic robot spacing, deterministic sidesteps, and shared-target berths; SB-052 adds static obstacle clearance, deterministic detours, and blocked-route recovery. Advanced grid pathfinding and deeper congestion behavior remain future extensions.
+4. **Deterministic bot avoidance:** SB-051 implements dynamic robot spacing, deterministic sidesteps, and shared-target berths; SB-052 adds static obstacle clearance, deterministic detours, and blocked-route recovery. SB-055 now extends this with bounded grid path planning.
 5. **Technology tree foundation:** define the graph schema, validator, server purchase/unlock records, and migration from existing flat upgrades; include bounded offline-cap upgrades.
 6. **Admin publishing workflow:** add draft preview, graph/economy validation, versioned publish, audit, and rollback for tree and simulation content.
 7. **Battle presentation:** extend trusted battle events into watchable Three.js PvE/PvP arenas, replay controls, and browser coverage.

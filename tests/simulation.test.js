@@ -236,6 +236,26 @@ test('manual pilot movement preserves the same robot spacing and field bounds', 
   assert.ok(sim.robots.every(robot => Math.abs(robot.x) <= FIELD_BOUNDS.maxX && Math.abs(robot.z) <= FIELD_BOUNDS.maxZ));
 });
 
+test('manual keyboard and mouse controls override automatic roles and then resume them', () => {
+  const sim = new SalvageSimulation();
+  sim.syncCrew({ scavenger: 1 });
+  const robot = sim.robots[0];
+  const start = { x: robot.x, z: robot.z };
+  sim.manualInput(robot.id, 1, 0);
+  sim.tick(.1);
+  assert.equal(robot.status, 'Manual pilot');
+  assert.notDeepEqual({ x: robot.x, z: robot.z }, start);
+  sim.manualInput(robot.id, 0, 0);
+  sim.tick(.1);
+  assert.notEqual(robot.status, 'Manual pilot');
+
+  const beforeWaypoint = { x: robot.x, z: robot.z };
+  assert.equal(sim.manualDestination(robot.id, -8, 6), true);
+  sim.tick(.1);
+  assert.notEqual(robot.status, 'Moving to resource block');
+  assert.notDeepEqual({ x: robot.x, z: robot.z }, beforeWaypoint);
+});
+
 test('robots route around static field obstacles without rerolling blocked site cells', () => {
   const sim = new SalvageSimulation();
   sim.syncCrew({ scavenger: 1 });
@@ -253,6 +273,59 @@ test('robots route around static field obstacles without rerolling blocked site 
   assert.ok(salvageSitesForSeed(1234).every(site => NAVIGATION_OBSTACLES.every(obstacle =>
     Math.hypot(site.x - obstacle.x, site.z - obstacle.z) >= obstacle.radius + .3,
   )));
+});
+
+test('grid path planning is deterministic and detours around a blocked straight route', () => {
+  const plan = () => {
+    const sim = new SalvageSimulation();
+    sim.syncCrew({ scavenger: 1 });
+    sim.nodes.forEach(node => { node.remaining = 0; });
+    return sim.findGridPath(sim.robots[0], { x: -9, z: 1.7 });
+  };
+  const path = plan();
+  assert.ok(path);
+  assert.deepEqual(plan(), path);
+  assert.ok(path.length > 18, `detour path should be longer than the direct route: ${path.length}`);
+  assert.ok(path.every(point => NAVIGATION_OBSTACLES.every(obstacle =>
+    Math.hypot(point.x - obstacle.x, point.z - obstacle.z) >= obstacle.radius,
+  )));
+  assert.ok(path.some(point => point.z < 1 || point.z > 2.5), 'path should route around the obstacle band');
+});
+
+test('grid paths stay clear of live blocks and unlocked structures', () => {
+  const sim = new SalvageSimulation();
+  sim.syncCrew({ scavenger: 1 });
+  const robot = sim.robots[0];
+  const path = sim.findGridPath(robot, { x: -9, z: 2 });
+  assert.ok(path);
+  assert.ok(path.every(point => sim.nodes.every(node => node.remaining <= 0
+    || Math.hypot(point.x - node.x, point.z - node.z) >= .97)));
+
+  sim.setTechnologyEffects({ sceneUnlocks: ['refinery'] });
+  const structurePath = sim.findGridPath(robot, { x: -9, z: 2 });
+  assert.ok(structurePath);
+  assert.ok(structurePath.every(point => Math.hypot(point.x - 3.2, point.z + 1.9) >= 1));
+});
+
+test('client route sample matches the server grid planner contract', () => {
+  const sim = new SalvageSimulation();
+  sim.syncCrew({ scavenger: 1 });
+  sim.deploy([{ action: 'move_to', x: -9, z: 2 }]);
+  for (let tick = 0; tick < 30; tick++) sim.tick(.1);
+  assert.equal(sim.robots[0].x, -5.5);
+  assert.equal(sim.robots[0].z, .5);
+});
+
+test('a robot keeps its planned block approach side while it follows the route', () => {
+  const sim = new SalvageSimulation();
+  sim.syncCrew({ scavenger: 1 });
+  const block = { id: 'approach-check', x: 0, z: 0, remaining: 3 };
+  sim.nodes.push(block);
+  const robot = sim.robots[0];
+  const approach = sim.blockApproachPoint(robot, block);
+  robot.navigationPathGoal = { ...approach };
+  robot.x = -1; robot.z = 0;
+  assert.deepEqual(sim.blockApproachPoint(robot, block), approach);
 });
 
 test('an impossible obstacle-blocked waypoint is abandoned before work continues', () => {
@@ -308,14 +381,14 @@ test('seeded salvage sites vary deterministically across the larger field and av
 
 test('headless simulation contract replays bounded snapshots and rejects unsafe work', () => {
   const input = {
-    coreVersion: 5, seed: 42, crew: { scavenger: 1, scrap_hound: 1, fabricator: 0 },
+    coreVersion: 6, seed: 42, crew: { scavenger: 1, scrap_hound: 1, fabricator: 0 },
     assignments: { crew: DEFAULT_PROGRAM, units: { '1': [{ action: 'patrol' }, { action: 'scan' }, { action: 'collect', resource: 'scrap' }] } },
     upgrades: { servo: true, magnet: false }, ticks: 1200,
   };
   const first = resolveSimulation(input), replay = resolveSimulation(input);
   assert.equal(first.ok, true);
   assert.deepEqual(replay, first);
-  assert.equal(first.coreVersion, 5);
+  assert.equal(first.coreVersion, 6);
   assert.ok(first.snapshot.elapsed <= MAX_SIMULATION_TICKS / 10);
   assert.ok(first.payouts.every(payout => ['credits', 'scrap'].includes(payout.resource)));
   assert.equal(resolveSimulation({ ...input, ticks: MAX_SIMULATION_TICKS + 1 }).ok, false);

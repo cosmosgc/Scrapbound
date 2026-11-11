@@ -85,4 +85,16 @@ class GameCatalogTest extends TestCase
         $this->expectException(DomainException::class);
         app(GameCatalog::class)->validate($catalog);
     }
+
+    public function test_offline_time_technology_effect_is_an_integer_bounded_to_four_hours(): void
+    {
+        $content = config('scrapbound');
+        $content['technologyNodes'][0]['effects']['offlineSecondsBonus'] = 14400;
+        $validated = app(GameCatalog::class)->validate($content);
+        $this->assertSame(14400, $validated['technologyNodes'][0]['effects']['offlineSecondsBonus']);
+
+        $content['technologyNodes'][0]['effects']['offlineSecondsBonus'] = 14401;
+        $this->expectException(DomainException::class);
+        app(GameCatalog::class)->validate($content);
+    }
 }

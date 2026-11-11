@@ -19,7 +19,7 @@ test('Blockly program deploy changes the running crew program', async ({ page, b
   await expect(page.locator('#brain-status')).toContainText('Deployed 3 instructions');
 
   await page.goto(new URL('factory', baseURL).toString());
-  await expect(page.locator('#crew-status')).toContainText(/Driving to credits cache|Scanning salvage|Collecting credits|Returning with cargo/, { timeout: 15_000 });
+  await expect(page.locator('#crew-status')).toContainText(/Driving to credits cache|Scanning salvage|Collecting credits|Returning with cargo|Moving to resource block|Breaking resource block|Picking up dropped resource|Returning with mined resources/, { timeout: 15_000 });
 });
 
 test('Blockly program can be assigned to and restored for one robot', async ({ page, baseURL }) => {
@@ -30,13 +30,15 @@ test('Blockly program can be assigned to and restored for one robot', async ({ p
   })));
   await page.goto(new URL('brains', baseURL).toString());
   const target = page.locator('#brain-deploy-target');
-  await expect(target.locator('option')).toHaveCount(3);
+  await expect(target.locator('option[value="all"]')).toHaveCount(1);
+  await expect(target.locator('option[value^="role:"]')).toHaveCount(7);
+  await expect(target.locator('option[value^="unit:"]')).toHaveCount(2);
   await target.selectOption('unit:1');
   await page.locator('#deploy-brain').click();
   await expect(page.locator('#brain-status')).toContainText('to unit 02');
 
   await page.goto(new URL('factory', baseURL).toString());
-  await expect(page.locator('.crew-status-row').filter({ hasText: 'UNIT 02' })).toContainText(/Driving to credits cache|Scanning salvage|Collecting credits|Returning with cargo|Program deployed/);
+  await expect(page.locator('.crew-status-row').filter({ hasText: 'UNIT 02' })).toContainText(/Driving to credits cache|Scanning salvage|Collecting credits|Returning with cargo|Program deployed|Moving to resource block|Breaking resource block|Picking up dropped resource|Returning with mined resources/);
   const assigned = await page.evaluate(() => JSON.parse(localStorage.getItem('scrapbound.deployed-programs.v1')));
   expect(assigned.units['1']).toHaveLength(3);
 });
@@ -55,7 +57,7 @@ test('factory simulation exposes pause and speed controls', async ({ page, baseU
   await expect(page.locator('#reduced-motion')).toBeChecked();
 });
 
-test('accelerated browser playtest delivers program-earned credits', async ({ page, baseURL }) => {
+test('accelerated browser playtest earns resources from bot deliveries', async ({ page, baseURL }) => {
   await page.addInitScript(() => localStorage.setItem('scrapbound.save.v1', JSON.stringify({
     version: 2, credits: 0, scrap: 0, shards: 0, sector: 1, prestigeCount: 0,
     owned: { scavenger: 1, scrap_hound: 0, fabricator: 0 }, bought: {}, lastSeen: Date.now(), lifetimeCredits: 0,
@@ -64,7 +66,7 @@ test('accelerated browser playtest delivers program-earned credits', async ({ pa
   const speed = page.locator('#simulation-speed');
   await speed.click(); await speed.click();
   await expect(page.locator('#delivery-feed')).toContainText('+', { timeout: 20_000 });
-  await expect(page.locator('#credits')).not.toHaveText('0');
+  await expect.poll(async () => Number(await page.locator('#credits').innerText()) + Number(await page.locator('#scrap').innerText())).toBeGreaterThan(0);
 });
 
 test('WebGL failure keeps the status UI usable and mobile layout within viewport', async ({ page, baseURL }) => {
@@ -77,7 +79,7 @@ test('WebGL failure keeps the status UI usable and mobile layout within viewport
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(new URL('factory', baseURL).toString());
-  await expect(page.locator('.scene-fallback')).toContainText('simulation and delivery rewards continue normally');
+  await expect(page.locator('.scene-fallback')).toContainText('Your robots keep working.');
   await expect(page.locator('.scene-fallback-canvas')).toBeVisible();
   await expect(page.locator('#crew-status')).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
@@ -100,12 +102,23 @@ test('custom keyboard profile drives only its assigned bot', async ({ page, base
 
 test('mouse pilot sends the selected bot to a clicked workshop point', async ({ page, baseURL }) => {
   await page.goto(new URL('brains', baseURL).toString());
+  await expect(page.locator('#control-status')).toContainText('program mode');
+  await expect.poll(async () => Boolean(await page.evaluate(() => localStorage.getItem('scrapbound.controls.v1')))).toBe(true);
   await page.locator('#control-mode').selectOption('mouse');
+  await expect.poll(async () => (await page.evaluate(() => JSON.parse(localStorage.getItem('scrapbound.controls.v1'))))?.profiles?.Default?.mode).toBe('mouse');
   await page.locator('#control-assign-profile').click();
+  const controls = await page.evaluate(() => JSON.parse(localStorage.getItem('scrapbound.controls.v1')));
+  expect(controls.profiles.Default.mode).toBe('mouse');
+  expect(controls.assignments['0']).toBe('Default');
   await page.goto(new URL('factory', baseURL).toString());
+  const restoredControls = await page.evaluate(() => JSON.parse(localStorage.getItem('scrapbound.controls.v1')));
+  expect(restoredControls.profiles.Default.mode).toBe('mouse');
+  expect(restoredControls.assignments['0']).toBe('Default');
+  await page.locator('[data-view="top"]').click();
   const canvas = page.locator('#factory-scene canvas');
+  await canvas.scrollIntoViewIfNeeded();
   const bounds = await canvas.boundingBox();
-  await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height * .68);
+  await page.mouse.click(bounds.x + bounds.width * .85, bounds.y + bounds.height * .2);
   await expect(page.locator('#crew-status')).toContainText('Driving to mouse waypoint', { timeout: 5_000 });
 });
 
@@ -142,7 +155,8 @@ test('signed-in player loads server jobs and persists programs and robot purchas
 
   await page.goto(new URL('brains', baseURL).toString());
   await expect(page.locator('#blockly-workspace .blocklySvg')).toBeVisible();
-  await expect(page.locator('#brain-deploy-target option')).toHaveCount(2);
+  await expect(page.locator('#brain-deploy-target option[value="all"]')).toHaveCount(1);
+  await expect(page.locator('#brain-deploy-target option[value^="unit:"]')).toHaveCount(1);
   await page.locator('#deploy-brain').click();
   await expect(page.locator('#brain-status')).toContainText('Saved and deployed 3 steps');
 
@@ -151,7 +165,8 @@ test('signed-in player loads server jobs and persists programs and robot purchas
   await expect(page.locator('#unit-count')).toContainText('2 / 20');
 
   await page.goto(new URL('brains', baseURL).toString());
-  await expect(page.locator('#brain-deploy-target option')).toHaveCount(3);
+  await expect(page.locator('#brain-deploy-target option[value="all"]')).toHaveCount(1);
+  await expect(page.locator('#brain-deploy-target option[value^="unit:"]')).toHaveCount(2);
   await expect(page.locator('#server-template-list')).toContainText('Salvage scout');
   await page.locator('a[data-route="/expeditions"]').click();
   await page.locator('#cooperative-goal').selectOption('2');
@@ -259,8 +274,8 @@ test('signed-in player can research geological survey and see the technology unl
   await expect(page.locator('#technology-tree')).toContainText('Geological survey');
   await expect(page.locator('#technology-tree')).toContainText('READY TO RESEARCH');
   await expect(page.locator('#technology-tree .technology-map')).toBeVisible();
-  await expect(page.locator('#technology-tree .technology-link')).toHaveCount(8);
-  await expect(page.locator('#technology-tree [data-tech-node]')).toHaveCount(8);
+  await expect(page.locator('#technology-tree .technology-link')).toHaveCount(9);
+  await expect(page.locator('#technology-tree [data-tech-node]')).toHaveCount(9);
   const connectorInsets = await page.locator('#technology-tree .technology-map').evaluate(map => {
     const nodes = [...map.querySelectorAll('[data-tech-node]')].map(element => {
       const rect = element.getBoundingClientRect();
@@ -272,7 +287,7 @@ test('signed-in player can research geological survey and see the technology unl
       return points.map(point => Math.min(...nodes.map(node => Math.hypot(point.x - node.x, point.y - node.y))));
     });
   });
-  expect(connectorInsets).toHaveLength(16);
+  expect(connectorInsets).toHaveLength(18);
   expect(connectorInsets.every(distance => distance >= 80 && distance <= 101)).toBeTruthy();
   await expect(page.locator('#technology-tree')).toContainText('Deep veins');
   await expect(page.locator('#technology-tree')).toContainText('Sorting rig');
@@ -297,7 +312,7 @@ test('signed-in factory renders server offline settlement summary and wallet bal
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
-      ok: true, world_seed: 42, elapsed_seconds: 120, credited_seconds: 120, capped: false, ticks: 1200,
+      ok: true, world_seed: 42, elapsed_seconds: 120, credited_seconds: 120, offline_cap_seconds: 16200, capped: false, ticks: 1200,
       payouts: [{ resource: 'credits', amount: 50, deliveries: 2 }],
       snapshot: { robots: [], nodes: [] }, wallet: { credits: 170, scrap: 18 }, settled_at: new Date().toISOString(),
     }),
@@ -310,7 +325,7 @@ test('signed-in factory renders server offline settlement summary and wallet bal
   await page.locator('#auth-password').fill('OfflineTest-Only-2026!');
   await page.locator('#auth-submit').click();
   await expect(page.locator('#auth-button')).toContainText(username);
-  await expect(page.locator('#delivery-feed')).toContainText('Offline bots worked 2m · 2 depot deliveries');
+  await expect(page.locator('#delivery-feed')).toContainText('Offline bots worked 2m · 2 depot deliveries · offline limit 4h 30m');
   await expect(page.locator('#delivery-feed')).toContainText('2 depot runs');
   await expect(page.locator('#credits-server')).toHaveText('SERVER ¢170');
 });

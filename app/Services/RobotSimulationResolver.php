@@ -12,6 +12,7 @@ class RobotSimulationResolver
         ['x' => -3.8, 'z' => -1.8, 'radius' => .45],
         ['x' => 3.8, 'z' => -1.8, 'radius' => .45],
     ];
+    private const NAVIGATION_GRID_STEP = .5;
 
     public function resolve(array $crew, array $assignments, int $seed, int $ticks, array $upgrades = [], ?array $rewards = null, ?array $resources = null, array $technologyEffects = []): array
     {
@@ -35,6 +36,7 @@ class RobotSimulationResolver
                     'cargo' => 0, 'cargo_type' => 'credits', 'work' => 0.0, 'wait' => 0.0,
                     'automation' => ! $program || $program === [['action' => 'patrol'], ['action' => 'scan'], ['action' => 'collect', 'resource' => 'credits']],
                     'navigation_goal' => null, 'best_distance' => null, 'stalled_ticks' => 0,
+                    'navigation_path_goal' => null, 'navigation_path' => [], 'navigation_path_ready' => false, 'navigation_path_blocked' => false,
                 ];
             }
         }
@@ -154,7 +156,7 @@ class RobotSimulationResolver
                             break;
                         }
                     }
-                    $target = $this->findSite($robot, $nodes, $resource, $robots);
+                    $target = $this->findSite($robot, $nodes, $resource, $robots, $technologyEffects);
                     if ($target === null) {
                         $robot['status'] = 'No matching salvage nearby';
 
@@ -229,7 +231,7 @@ class RobotSimulationResolver
                 return;
             }
             if ($robot['target'] !== null) {
-                $destination = $this->blockApproachPoint($robot, $nodes[$robot['target']], $nodes) ?? $destination;
+                $destination = $this->blockApproachPoint($robot, $nodes[$robot['target']], $nodes, $technologyEffects) ?? $destination;
             }
             if ($this->moveToward($robot, $destination, $dt, $upgrades, $robots, $technologyEffects, $nodes, $robot['target'] === null)) {
                 $robot['destination'] = null;
@@ -238,6 +240,7 @@ class RobotSimulationResolver
                 $robot['navigation_goal'] = null;
                 $robot['best_distance'] = null;
                 $robot['stalled_ticks'] = 0;
+                $this->resetNavigationPath($robot);
             } elseif ($this->updateNavigationProgress($robot, $destination)) {
                 if ($robot['cargo'] === 0) {
                     $robot['target'] = null;
@@ -248,6 +251,7 @@ class RobotSimulationResolver
                     $robot['best_distance'] = null;
                     $robot['stalled_ticks'] = 0;
                     $this->next($robot);
+                    $this->resetNavigationPath($robot);
                 } else {
                     $robot['status'] = 'Waiting for a clear route with cargo';
                 }
@@ -313,8 +317,10 @@ class RobotSimulationResolver
                 $robot['navigation_goal'] = null;
                 $robot['best_distance'] = null;
                 $robot['stalled_ticks'] = 0;
+                $this->resetNavigationPath($robot);
             } elseif ($this->updateNavigationProgress($robot, self::HOME)) {
                 $robot['status'] = 'Waiting for a clear depot approach';
+                $this->resetNavigationPath($robot);
             }
         } elseif ($robot['phase'] === 'wait') {
             $robot['wait'] -= $dt;
@@ -367,17 +373,19 @@ class RobotSimulationResolver
                 : ($robot['target'] !== null ? ($nodes[$robot['target']] ?? null) : null);
             if (! $destination) { $robot['target'] = null; $robot['target_drop'] = null; $robot['phase'] = 'idle'; return; }
             $goal = $robot['target_drop'] !== null
-                ? $this->dropApproachPoint($robot, $destination, $nodes)
-                : $this->blockApproachPoint($robot, $destination, $nodes);
+                ? $this->dropApproachPoint($robot, $destination, $nodes, $technologyEffects)
+                : $this->blockApproachPoint($robot, $destination, $nodes, $technologyEffects);
             if ($goal === null) { $robot['target'] = null; $robot['target_drop'] = null; $robot['phase'] = 'idle'; $robot['status'] = 'Target blocked; choosing another route'; return; }
             if ($this->moveToward($robot, $goal, $dt, $upgrades, $robots, $technologyEffects, $nodes, false)) {
                 $robot['phase'] = $robot['target_drop'] !== null ? 'pickup' : 'mining';
                 $robot['work'] = 0;
                 $robot['status'] = $robot['phase'] === 'pickup' ? 'Picking up dropped resource' : 'Breaking resource block';
                 $robot['navigation_goal'] = null; $robot['best_distance'] = null; $robot['stalled_ticks'] = 0;
+                $this->resetNavigationPath($robot);
             } elseif ($this->updateNavigationProgress($robot, $goal)) {
                 $robot['target'] = null; $robot['target_drop'] = null; $robot['phase'] = 'idle'; $robot['status'] = 'Route blocked; choosing another target';
                 $robot['navigation_goal'] = null; $robot['best_distance'] = null; $robot['stalled_ticks'] = 0;
+                $this->resetNavigationPath($robot);
             }
 
             return;
@@ -429,14 +437,14 @@ class RobotSimulationResolver
         if (! $isMiner && ! $isGeneralist) { $robot['status'] = 'Waiting for mined resources'; return; }
         $blockIds = [];
         foreach ($nodes as $index => $node) {
-            if ($node['remaining'] > 0 && ! isset($reservedBlocks[$index]) && $this->blockApproachPoint($robot, $node, $nodes) !== null) $blockIds[] = $index;
+            if ($node['remaining'] > 0 && ! isset($reservedBlocks[$index]) && $this->blockApproachPoint($robot, $node, $nodes, $technologyEffects) !== null) $blockIds[] = $index;
         }
         usort($blockIds, fn (int $a, int $b): int => hypot($nodes[$a]['x'] - $robot['x'], $nodes[$a]['z'] - $robot['z']) <=> hypot($nodes[$b]['x'] - $robot['x'], $nodes[$b]['z'] - $robot['z']));
         if (! $blockIds) { $robot['status'] = 'Waiting for available block'; return; }
         $robot['target'] = $blockIds[0]; $robot['phase'] = 'travel'; $robot['status'] = 'Moving to resource block';
     }
 
-    private function findSite(array $robot, array $nodes, string $resource, array $robots): ?int
+    private function findSite(array $robot, array $nodes, string $resource, array $robots, array $technologyEffects): ?int
     {
         $assigned = [];
         foreach ($robots as $other) {
@@ -447,7 +455,7 @@ class RobotSimulationResolver
         $ids = [];
         foreach ($nodes as $index => $node) {
             if ($node['resource'] === $resource && $node['remaining'] > 0 && ! isset($assigned[$index])
-                && $this->blockApproachPoint($robot, $node, $nodes) !== null) {
+                && $this->blockApproachPoint($robot, $node, $nodes, $technologyEffects) !== null) {
                 $ids[] = $index;
             }
         }
@@ -479,6 +487,151 @@ class RobotSimulationResolver
                 $destination = ['x' => $destination['x'] + cos($angle) * .8, 'z' => $destination['z'] + sin($angle) * .8];
             }
         }
+        if ($robot['kind'] !== 'sky_miner') {
+            $pathGoal = $robot['navigation_path_goal'];
+            if (! is_array($pathGoal) || abs($pathGoal['x'] - $destination['x']) > .000001 || abs($pathGoal['z'] - $destination['z']) > .000001) {
+                $path = $this->findGridPath($robot, $destination, $technologyEffects, $nodes);
+                $robot['navigation_path_goal'] = $destination;
+                $robot['navigation_path'] = $path ?? [];
+                $robot['navigation_path_ready'] = true;
+                $robot['navigation_path_blocked'] = $path === null;
+            }
+            if ($robot['navigation_path_blocked']) {
+                return false;
+            }
+            while ($robot['navigation_path'] && hypot(
+                $robot['navigation_path'][0]['x'] - $robot['x'],
+                $robot['navigation_path'][0]['z'] - $robot['z'],
+            ) <= .12) {
+                array_shift($robot['navigation_path']);
+            }
+            if ($robot['navigation_path']) {
+                if ($this->moveDirectToward($robot, $robot['navigation_path'][0], $dt, $upgrades, $robots, $technologyEffects, $nodes)) {
+                    array_shift($robot['navigation_path']);
+                }
+
+                return false;
+            }
+        }
+
+        return $this->moveDirectToward($robot, $destination, $dt, $upgrades, $robots, $technologyEffects, $nodes);
+    }
+
+    private function findGridPath(array $robot, array $destination, array $technologyEffects, array $nodes): ?array
+    {
+        $width = (int) round((16 - -16) / self::NAVIGATION_GRID_STEP) + 1;
+        $height = (int) round((10 - -10) / self::NAVIGATION_GRID_STEP) + 1;
+        $total = $width * $height;
+        $toCell = static fn (float $x, float $z): array => [
+            max(0, min($width - 1, (int) round(($x + 16) / self::NAVIGATION_GRID_STEP))),
+            max(0, min($height - 1, (int) round(($z + 10) / self::NAVIGATION_GRID_STEP))),
+        ];
+        $indexOf = static fn (int $cellX, int $cellZ): int => $cellZ * $width + $cellX;
+        $pointOf = static fn (int $index): array => [
+            'x' => -16 + ($index % $width) * self::NAVIGATION_GRID_STEP,
+            'z' => -10 + (int) floor($index / $width) * self::NAVIGATION_GRID_STEP,
+        ];
+        if (! $this->positionIsStaticallyClear($robot, $destination['x'], $destination['z'], $technologyEffects, $nodes)) return null;
+        $movementObstacles = $robot['kind'] === 'sky_miner' ? [] : $this->obstaclesFor($technologyEffects);
+        if ($robot['kind'] !== 'sky_miner') {
+            foreach ($nodes as $node) if ($node['remaining'] > 0) $movementObstacles[] = ['x' => $node['x'], 'z' => $node['z'], 'radius' => .72];
+        }
+        $blocked = array_fill(0, $total, false);
+        foreach ($movementObstacles as $obstacle) {
+            $minX = max(0, (int) floor(($obstacle['x'] - $obstacle['radius'] + 16) / self::NAVIGATION_GRID_STEP));
+            $maxX = min($width - 1, (int) ceil(($obstacle['x'] + $obstacle['radius'] + 16) / self::NAVIGATION_GRID_STEP));
+            $minZ = max(0, (int) floor(($obstacle['z'] - $obstacle['radius'] + 10) / self::NAVIGATION_GRID_STEP));
+            $maxZ = min($height - 1, (int) ceil(($obstacle['z'] + $obstacle['radius'] + 10) / self::NAVIGATION_GRID_STEP));
+            for ($cellZ = $minZ; $cellZ <= $maxZ; $cellZ++) {
+                for ($cellX = $minX; $cellX <= $maxX; $cellX++) {
+                    $index = $indexOf($cellX, $cellZ);
+                    $point = $pointOf($index);
+                    if (hypot($point['x'] - $obstacle['x'], $point['z'] - $obstacle['z']) < $obstacle['radius'] + self::NAVIGATION_GRID_STEP * .5) $blocked[$index] = true;
+                }
+            }
+        }
+        [$startX, $startZ] = $toCell($robot['x'], $robot['z']);
+        $start = null;
+        for ($radius = 0; $radius <= 2 && $start === null; $radius++) {
+            $candidates = [];
+            for ($dz = -$radius; $dz <= $radius; $dz++) {
+                for ($dx = -$radius; $dx <= $radius; $dx++) {
+                    if (abs($dx) + abs($dz) !== $radius) continue;
+                    $cellX = $startX + $dx;
+                    $cellZ = $startZ + $dz;
+                    if ($cellX < 0 || $cellX >= $width || $cellZ < 0 || $cellZ >= $height) continue;
+                    $index = $indexOf($cellX, $cellZ);
+                    $point = $pointOf($index);
+                    if (! $blocked[$index]) $candidates[] = ['index' => $index, 'gap' => hypot($point['x'] - $robot['x'], $point['z'] - $robot['z'])];
+                }
+            }
+            usort($candidates, static fn (array $left, array $right): int => ($left['gap'] <=> $right['gap']) ?: ($left['index'] <=> $right['index']));
+            if ($candidates) $start = $candidates[0]['index'];
+        }
+        if ($start === null) return null;
+        [$goalX, $goalZ] = $toCell($destination['x'], $destination['z']);
+        $goals = [];
+        for ($radius = 0; $radius <= 2; $radius++) {
+            for ($dz = -$radius; $dz <= $radius; $dz++) {
+                for ($dx = -$radius; $dx <= $radius; $dx++) {
+                    if (abs($dx) + abs($dz) !== $radius) continue;
+                    $cellX = $goalX + $dx;
+                    $cellZ = $goalZ + $dz;
+                    if ($cellX < 0 || $cellX >= $width || $cellZ < 0 || $cellZ >= $height) continue;
+                    $index = $indexOf($cellX, $cellZ);
+                    $point = $pointOf($index);
+                    $gap = hypot($point['x'] - $destination['x'], $point['z'] - $destination['z']);
+                    if ($gap <= .8 && ! $blocked[$index]) $goals[] = ['index' => $index, 'gap' => $gap];
+                }
+            }
+            if ($goals) break;
+        }
+        usort($goals, static fn (array $left, array $right): int => ($left['gap'] <=> $right['gap']) ?: ($left['index'] <=> $right['index']));
+        if (! $goals) return null;
+        $goal = $goals[0]['index'];
+        if ($goal === $start) return [];
+
+        $parents = array_fill(0, $total, -2);
+        $parents[$start] = -1;
+        $queue = array_fill(0, $total, 0);
+        $head = 0;
+        $tail = 0;
+        $queue[$tail++] = $start;
+        $neighbors = [[1, 0], [0, 1], [0, -1], [-1, 0]];
+        $found = false;
+        while ($head < $tail && $tail <= $total) {
+            $current = $queue[$head++];
+            if ($current === $goal) { $found = true; break; }
+            $cellX = $current % $width;
+            $cellZ = (int) floor($current / $width);
+            foreach ($neighbors as [$dx, $dz]) {
+                $nextX = $cellX + $dx;
+                $nextZ = $cellZ + $dz;
+                if ($nextX < 0 || $nextX >= $width || $nextZ < 0 || $nextZ >= $height) continue;
+                $next = $indexOf($nextX, $nextZ);
+                if ($parents[$next] !== -2 || $blocked[$next]) continue;
+                $parents[$next] = $current;
+                $queue[$tail++] = $next;
+            }
+        }
+        if (! $found) return null;
+        $path = [];
+        for ($current = $goal; $current !== $start; $current = $parents[$current]) $path[] = $pointOf($current);
+        return array_reverse($path);
+    }
+
+    private function positionIsStaticallyClear(array $robot, float $x, float $z, array $technologyEffects, array $nodes): bool
+    {
+        if ($robot['kind'] === 'sky_miner') return true;
+        if ($this->blockedByObstacle($x, $z, $this->obstaclesFor($technologyEffects))) return false;
+        foreach ($nodes as $node) {
+            if ($node['remaining'] > 0 && hypot($x - $node['x'], $z - $node['z']) < .72) return false;
+        }
+        return true;
+    }
+
+    private function moveDirectToward(array &$robot, array $destination, float $dt, array $upgrades, array $robots, array $technologyEffects, array $nodes): bool
+    {
         $dx = $destination['x'] - $robot['x'];
         $dz = $destination['z'] - $robot['z'];
         $distance = hypot($dx, $dz);
@@ -546,7 +699,7 @@ class RobotSimulationResolver
         return $obstacles;
     }
 
-    private function blockApproachPoint(array $robot, array $block, array $nodes): ?array
+    private function blockApproachPoint(array $robot, array $block, array $nodes, array $technologyEffects = []): ?array
     {
         $clearance = .96;
         $points = [
@@ -555,9 +708,19 @@ class RobotSimulationResolver
             ['x' => $block['x'], 'z' => $block['z'] + $clearance],
             ['x' => $block['x'], 'z' => $block['z'] - $clearance],
         ];
-        $obstacles = $this->obstaclesFor([]);
+        $obstacles = $this->obstaclesFor($technologyEffects);
         foreach ($nodes as $node) {
             if ($node['remaining'] > 0) $obstacles[] = ['x' => $node['x'], 'z' => $node['z'], 'radius' => .72];
+        }
+        $planned = $robot['navigation_path_goal'] ?? null;
+        if (is_array($planned)) {
+            foreach ($points as $point) {
+                if (abs($point['x'] - $planned['x']) < .000001 && abs($point['z'] - $planned['z']) < .000001
+                    && abs($point['x']) <= 16 && abs($point['z']) <= 10
+                    && ! $this->blockedByObstacle($point['x'], $point['z'], $obstacles)) {
+                    return $point;
+                }
+            }
         }
         $points = array_values(array_filter($points, fn (array $point): bool =>
             abs($point['x']) <= 16 && abs($point['z']) <= 10
@@ -570,11 +733,11 @@ class RobotSimulationResolver
         return $points[0] ?? null;
     }
 
-    private function dropApproachPoint(array $robot, array $drop, array $nodes): ?array
+    private function dropApproachPoint(array $robot, array $drop, array $nodes, array $technologyEffects = []): ?array
     {
         foreach ($nodes as $node) {
             if ($node['remaining'] > 0 && $node['x'] === $drop['x'] && $node['z'] === $drop['z']) {
-                return $this->blockApproachPoint($robot, $node, $nodes);
+                return $this->blockApproachPoint($robot, $node, $nodes, $technologyEffects);
             }
         }
 
@@ -613,5 +776,13 @@ class RobotSimulationResolver
         $robot['stalled_ticks']++;
 
         return $robot['stalled_ticks'] >= 100;
+    }
+
+    private function resetNavigationPath(array &$robot): void
+    {
+        $robot['navigation_path_goal'] = null;
+        $robot['navigation_path'] = [];
+        $robot['navigation_path_ready'] = false;
+        $robot['navigation_path_blocked'] = false;
     }
 }

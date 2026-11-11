@@ -1,6 +1,6 @@
 import { parseProgram } from './program-schema.js';
 
-export const SIMULATION_CORE_VERSION = 5;
+export const SIMULATION_CORE_VERSION = 6;
 export const FIELD_BOUNDS = Object.freeze({ minX: -16, maxX: 16, minZ: -10, maxZ: 10 });
 export const STORAGE_DEPOT = Object.freeze({ x: 0, z: 0 });
 export const NAVIGATION_OBSTACLES = Object.freeze([
@@ -12,6 +12,7 @@ export const NAVIGATION_OBSTACLES = Object.freeze([
 ]);
 
 const SITE_SLOTS = [];
+const NAVIGATION_GRID_STEP = .5;
 for (let z = -9; z <= 9; z += 2) {
   for (let x = -15; x <= 15; x += 2) {
     // Solid voxel blocks fill the mining field; keep the depot/platform clear.
@@ -93,18 +94,21 @@ export class SalvageSimulation {
     if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) return false;
     this.seed = seed >>> 0;
     this.nodes = salvageSitesForSeed(this.seed, this.resourceDefinitions, this.technologyEffects).map(site => ({ ...site, remaining: site.stock, respawn: 0, scanned: false }));
+    this.robots.forEach(robot => this.resetNavigationPath(robot));
     return true;
   }
 
   setTechnologyEffects(effects = {}) {
     this.technologyEffects = effects;
     this.nodes = salvageSitesForSeed(this.seed, this.resourceDefinitions, effects).map(site => ({ ...site, remaining: site.stock, respawn: 0, scanned: false }));
+    this.robots.forEach(robot => this.resetNavigationPath(robot));
   }
 
   setResourceDefinitions(resources) {
     if (!Array.isArray(resources) || !resources.length) return false;
     this.resourceDefinitions = resources.map(resource => ({ ...resource }));
     this.nodes = salvageSitesForSeed(this.seed, this.resourceDefinitions, this.technologyEffects).map(site => ({ ...site, remaining: site.stock, respawn: 0, scanned: false }));
+    this.robots.forEach(robot => this.resetNavigationPath(robot));
     return true;
   }
 
@@ -121,6 +125,7 @@ export class SalvageSimulation {
         ...(Number.isFinite(value.respawnRemaining) && value.respawnRemaining >= 0 ? { respawn: value.respawnRemaining } : {}),
         ...(Number.isFinite(value.respawnSeconds) && value.respawnSeconds > 0 ? { respawnSeconds: value.respawnSeconds } : {}) };
     });
+    this.robots.forEach(robot => this.resetNavigationPath(robot));
     if (Array.isArray(drops) && drops.length <= 500) {
       const validResources = new Set(this.resourceDefinitions.map(resource => resource.id));
       this.drops = drops.filter(drop => drop && typeof drop.id === 'string' && drop.id.length <= 80
@@ -146,6 +151,8 @@ export class SalvageSimulation {
         program: (this.unitPrograms[i] || this.rolePrograms[kind] || this.activeProgram).map(step => ({ ...step })), command: 0, phase: 'idle', targetId: null,
         cargo: 0, cargoType: 'credits', work: 0, wait: 0, status: 'Ready', automation: !this.unitPrograms[i] && !this.rolePrograms[kind] && JSON.stringify(this.activeProgram) === JSON.stringify(DEFAULT_PROGRAM),
         navigationGoal: null, bestDistance: null, stalledTicks: 0,
+        navigationPathGoal: null, navigationPath: [], navigationPathReady: false, navigationPathBlocked: false,
+        manualWaypointActive: false,
       };
     }
     this.robots.forEach((robot, index) => { robot.id = index; });
@@ -206,7 +213,13 @@ export class SalvageSimulation {
     robot.program = program.map(step => ({ ...step }));
     robot.command = 0; robot.phase = 'idle'; robot.targetId = null; robot.cargo = 0;
     robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0;
+    this.resetNavigationPath(robot);
     robot.status = program.length ? 'Program deployed' : 'No program loaded';
+  }
+
+  resetNavigationPath(robot) {
+    robot.navigationPathGoal = null; robot.navigationPath = [];
+    robot.navigationPathReady = false; robot.navigationPathBlocked = false;
   }
 
   setUpgrades(upgrades = {}) { this.upgrades = { ...upgrades }; }
@@ -226,13 +239,12 @@ export class SalvageSimulation {
   }
 
   stepRobot(robot, dt) {
-    if (robot.automation && ['scavenger', 'scrap_hound', 'fabricator', 'block_miner', 'sky_miner', 'cargo_hauler', 'buffer_bot'].includes(robot.kind)) {
-      this.stepAutomaticRobot(robot, dt);
-      return;
-    }
     const input = robot.manualInput || { x: 0, z: 0 };
     if (input.x || input.z) {
-      if (!robot.manualActive) { robot.phase = 'manual'; robot.targetId = null; robot.destination = null; }
+      if (!robot.manualActive) {
+        robot.phase = 'manual'; robot.targetId = null; robot.targetDropId = null; robot.destination = null;
+        robot.manualWaypointActive = false; this.resetNavigationPath(robot);
+      }
       robot.manualActive = true; robot.phase = 'manual'; robot.status = 'Manual pilot';
       const length = Math.hypot(input.x, input.z) || 1;
       const speed = this.movementSpeed(robot) * (this.upgrades.servo ? 1.25 : 1);
@@ -249,7 +261,24 @@ export class SalvageSimulation {
       }
       return;
     }
-    if (robot.manualActive) { robot.manualActive = false; robot.phase = 'idle'; robot.status = 'Program resumed'; }
+    if (robot.manualWaypointActive) {
+      const destination = robot.destination;
+      if (!destination || this.moveToward(robot, destination, dt, false)) {
+        robot.manualWaypointActive = false; robot.destination = null; robot.phase = 'idle'; robot.status = 'Waypoint reached';
+        robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0; this.resetNavigationPath(robot);
+      } else if (this.updateNavigationProgress(robot, destination)) {
+        robot.manualWaypointActive = false; robot.destination = null; robot.phase = 'idle'; robot.status = 'Route blocked; replanning';
+        robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0; this.resetNavigationPath(robot);
+      }
+      return;
+    }
+    if (robot.manualActive) {
+      robot.manualActive = false; robot.phase = 'idle'; robot.status = robot.automation ? 'Automation resumed' : 'Program resumed';
+    }
+    if (robot.automation && ['scavenger', 'scrap_hound', 'fabricator', 'block_miner', 'sky_miner', 'cargo_hauler', 'buffer_bot'].includes(robot.kind)) {
+      this.stepAutomaticRobot(robot, dt);
+      return;
+    }
     if (!robot.program.length && robot.phase === 'idle') { robot.status = 'Waiting for a program'; return; }
     let safety = 0;
     while (robot.phase === 'idle' && safety++ < 8) {
@@ -295,11 +324,13 @@ export class SalvageSimulation {
         robot.destination = null; robot.phase = 'idle';
         if (robot.program.length) this.next(robot); else robot.status = 'Waypoint reached';
         robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0;
+        this.resetNavigationPath(robot);
       } else if (this.updateNavigationProgress(robot, target)) {
         if (robot.cargo === 0) {
           robot.targetId = null; robot.destination = null; robot.phase = 'idle';
           robot.status = 'Route blocked; replanning'; robot.navigationGoal = null; robot.bestDistance = null;
           robot.stalledTicks = 0; this.next(robot);
+          this.resetNavigationPath(robot);
         } else {
           robot.status = 'Waiting for a clear route with cargo';
         }
@@ -344,8 +375,10 @@ export class SalvageSimulation {
         }
         robot.cargo = 0; robot.targetId = null; robot.phase = 'idle'; robot.status = 'Cargo delivered'; this.next(robot);
         robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0;
+        this.resetNavigationPath(robot);
       } else if (this.updateNavigationProgress(robot, HOME)) {
         robot.status = 'Waiting for a clear depot approach';
+        this.resetNavigationPath(robot);
       }
     } else if (robot.phase === 'wait') {
       robot.wait -= dt;
@@ -378,6 +411,10 @@ export class SalvageSimulation {
           this.onDelivery(currency, amount, robot);
         }
         robot.cargo = 0; robot.targetId = null; robot.phase = 'idle'; robot.status = 'Cargo delivered';
+        this.resetNavigationPath(robot);
+      } else if (this.updateNavigationProgress(robot, HOME)) {
+        robot.status = 'Waiting for a clear depot approach';
+        this.resetNavigationPath(robot);
       }
       return;
     }
@@ -394,9 +431,11 @@ export class SalvageSimulation {
         robot.work = 0;
         robot.status = block ? 'Breaking resource block' : 'Picking up dropped resource';
         robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0;
+        this.resetNavigationPath(robot);
       } else if (this.updateNavigationProgress(robot, goal)) {
         robot.targetId = null; robot.phase = 'idle'; robot.status = 'Route blocked; choosing another target';
         robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0;
+        this.resetNavigationPath(robot);
       }
       return;
     }
@@ -458,8 +497,10 @@ export class SalvageSimulation {
     if (!robot) return false;
     robot.manualInput = { x: 0, z: 0 }; robot.manualActive = false;
     robot.destination = { x: Math.max(FIELD_BOUNDS.minX, Math.min(FIELD_BOUNDS.maxX, Number(x) || 0)), z: Math.max(FIELD_BOUNDS.minZ, Math.min(FIELD_BOUNDS.maxZ, Number(z) || 0)) };
+    robot.manualWaypointActive = true;
     robot.targetId = null; robot.phase = 'travel'; robot.status = 'Driving to mouse waypoint';
     robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0;
+    this.resetNavigationPath(robot);
     return true;
   }
   recordEvent(type, details) {
@@ -475,6 +516,11 @@ export class SalvageSimulation {
       { x: block.x + clearance, z: block.z }, { x: block.x - clearance, z: block.z },
       { x: block.x, z: block.z + clearance }, { x: block.x, z: block.z - clearance },
     ];
+    const planned = robot.navigationPathGoal;
+    if (planned) {
+      const stable = points.find(point => Math.abs(point.x - planned.x) < .000001 && Math.abs(point.z - planned.z) < .000001);
+      if (stable && this.positionIsStaticallyClear(robot, stable.x, stable.z)) return stable;
+    }
     return points.filter(point => this.positionIsClear(robot, point.x, point.z))
       .sort((a, b) => Math.hypot(a.x - robot.x, a.z - robot.z) - Math.hypot(b.x - robot.x, b.z - robot.z))[0] || null;
   }
@@ -499,6 +545,133 @@ export class SalvageSimulation {
         destination = { x: destination.x + Math.cos(angle) * .8, z: destination.z + Math.sin(angle) * .8 };
       }
     }
+    if (robot.kind !== 'sky_miner') {
+      const goalChanged = !robot.navigationPathGoal
+        || Math.abs(robot.navigationPathGoal.x - destination.x) > .000001
+        || Math.abs(robot.navigationPathGoal.z - destination.z) > .000001;
+      if (goalChanged) {
+        robot.navigationPathGoal = { x: destination.x, z: destination.z };
+        const path = this.findGridPath(robot, destination);
+        robot.navigationPath = path || [];
+        robot.navigationPathReady = true;
+        robot.navigationPathBlocked = path === null;
+      }
+      if (robot.navigationPathBlocked) return false;
+      while (robot.navigationPath.length && Math.hypot(
+        robot.navigationPath[0].x - robot.x, robot.navigationPath[0].z - robot.z,
+      ) <= .12) robot.navigationPath.shift();
+      if (robot.navigationPath.length) {
+        const waypoint = robot.navigationPath[0];
+        if (this.moveDirectToward(robot, waypoint, dt)) {
+          robot.navigationPath.shift();
+        }
+        return false;
+      }
+    }
+    return this.moveDirectToward(robot, destination, dt);
+  }
+
+  findGridPath(robot, destination) {
+    const width = Math.round((FIELD_BOUNDS.maxX - FIELD_BOUNDS.minX) / NAVIGATION_GRID_STEP) + 1;
+    const height = Math.round((FIELD_BOUNDS.maxZ - FIELD_BOUNDS.minZ) / NAVIGATION_GRID_STEP) + 1;
+    const total = width * height;
+    const toCell = (x, z) => ({
+      x: Math.max(0, Math.min(width - 1, Math.round((x - FIELD_BOUNDS.minX) / NAVIGATION_GRID_STEP))),
+      z: Math.max(0, Math.min(height - 1, Math.round((z - FIELD_BOUNDS.minZ) / NAVIGATION_GRID_STEP))),
+    });
+    const indexOf = (cellX, cellZ) => cellZ * width + cellX;
+    const pointOf = index => ({
+      x: FIELD_BOUNDS.minX + (index % width) * NAVIGATION_GRID_STEP,
+      z: FIELD_BOUNDS.minZ + Math.floor(index / width) * NAVIGATION_GRID_STEP,
+    });
+    if (!this.positionIsStaticallyClear(robot, destination.x, destination.z)) return null;
+    const obstacles = robot.kind === 'sky_miner' ? [] : [...NAVIGATION_OBSTACLES,
+      ...(this.technologyEffects.sceneUnlocks?.includes('survey_beacon') ? [{ x: -3.1, z: 1.9, radius: .4 }] : []),
+      ...(this.technologyEffects.sceneUnlocks?.includes('refinery') ? [{ x: 3.2, z: -1.9, radius: .75 }] : []),
+      ...this.nodes.filter(node => node.remaining > 0).map(node => ({ x: node.x, z: node.z, radius: .72 })),
+    ];
+    const blocked = new Uint8Array(total);
+    for (const obstacle of obstacles) {
+      const minX = Math.max(0, Math.floor((obstacle.x - obstacle.radius - FIELD_BOUNDS.minX) / NAVIGATION_GRID_STEP));
+      const maxX = Math.min(width - 1, Math.ceil((obstacle.x + obstacle.radius - FIELD_BOUNDS.minX) / NAVIGATION_GRID_STEP));
+      const minZ = Math.max(0, Math.floor((obstacle.z - obstacle.radius - FIELD_BOUNDS.minZ) / NAVIGATION_GRID_STEP));
+      const maxZ = Math.min(height - 1, Math.ceil((obstacle.z + obstacle.radius - FIELD_BOUNDS.minZ) / NAVIGATION_GRID_STEP));
+      for (let cellZ = minZ; cellZ <= maxZ; cellZ++) for (let cellX = minX; cellX <= maxX; cellX++) {
+        const point = pointOf(indexOf(cellX, cellZ));
+        if (Math.hypot(point.x - obstacle.x, point.z - obstacle.z) < obstacle.radius + NAVIGATION_GRID_STEP * .5) blocked[indexOf(cellX, cellZ)] = 1;
+      }
+    }
+    const startCell = toCell(robot.x, robot.z);
+    let start = -1;
+    for (let radius = 0; radius <= 2 && start < 0; radius++) {
+      const candidates = [];
+      for (let dz = -radius; dz <= radius; dz++) for (let dx = -radius; dx <= radius; dx++) {
+        if (Math.abs(dx) + Math.abs(dz) !== radius) continue;
+        const cellX = startCell.x + dx, cellZ = startCell.z + dz;
+        if (cellX < 0 || cellX >= width || cellZ < 0 || cellZ >= height) continue;
+        const index = indexOf(cellX, cellZ), point = pointOf(index);
+        if (!blocked[index]) candidates.push({ index, gap: Math.hypot(point.x - robot.x, point.z - robot.z) });
+      }
+      candidates.sort((a, b) => a.gap - b.gap || a.index - b.index);
+      if (candidates.length) start = candidates[0].index;
+    }
+    if (start < 0) return null;
+    const goalCell = toCell(destination.x, destination.z);
+    const goals = [];
+    for (let radius = 0; radius <= 2; radius++) {
+      for (let dz = -radius; dz <= radius; dz++) for (let dx = -radius; dx <= radius; dx++) {
+        if (Math.abs(dx) + Math.abs(dz) !== radius) continue;
+        const cellX = goalCell.x + dx, cellZ = goalCell.z + dz;
+        if (cellX < 0 || cellX >= width || cellZ < 0 || cellZ >= height) continue;
+        const index = indexOf(cellX, cellZ), point = pointOf(index);
+        const gap = Math.hypot(point.x - destination.x, point.z - destination.z);
+        if (gap <= .8 && !blocked[index]) goals.push({ index, gap });
+      }
+      if (goals.length) break;
+    }
+    goals.sort((a, b) => a.gap - b.gap || a.index - b.index);
+    if (!goals.length) return null;
+    const goal = goals[0].index;
+    if (goal === start) return [];
+
+    const parents = new Int32Array(total);
+    parents.fill(-2);
+    parents[start] = -1;
+    const queue = new Int32Array(total);
+    let head = 0, tail = 0;
+    queue[tail++] = start;
+    const neighbors = [[1, 0], [0, 1], [0, -1], [-1, 0]];
+    let found = false;
+    while (head < tail && tail <= total) {
+      const current = queue[head++];
+      if (current === goal) { found = true; break; }
+      const cellX = current % width, cellZ = Math.floor(current / width);
+      for (const [dx, dz] of neighbors) {
+        const nextX = cellX + dx, nextZ = cellZ + dz;
+        if (nextX < 0 || nextX >= width || nextZ < 0 || nextZ >= height) continue;
+        const next = indexOf(nextX, nextZ);
+        if (parents[next] !== -2 || blocked[next]) continue;
+        parents[next] = current;
+        queue[tail++] = next;
+      }
+    }
+    if (!found) return null;
+    const path = [];
+    for (let current = goal; current !== start; current = parents[current]) path.push(pointOf(current));
+    path.reverse();
+    return path;
+  }
+
+  positionIsStaticallyClear(robot, x, z) {
+    if (robot.kind === 'sky_miner') return true;
+    if (NAVIGATION_OBSTACLES.some(obstacle => Math.hypot(x - obstacle.x, z - obstacle.z) < obstacle.radius)) return false;
+    if (this.nodes.some(node => node.remaining > 0 && Math.hypot(x - node.x, z - node.z) < .72)) return false;
+    if (this.technologyEffects.sceneUnlocks?.includes('survey_beacon') && Math.hypot(x + 3.1, z - 1.9) < .4) return false;
+    if (this.technologyEffects.sceneUnlocks?.includes('refinery') && Math.hypot(x - 3.2, z + 1.9) < .75) return false;
+    return true;
+  }
+
+  moveDirectToward(robot, destination, dt) {
     const dx = destination.x - robot.x, dz = destination.z - robot.z;
     const distance = Math.hypot(dx, dz), speed = this.movementSpeed(robot) * (this.upgrades.servo ? 1.25 : 1);
     if (distance <= .000001) return true;
@@ -520,10 +693,7 @@ export class SalvageSimulation {
   }
 
   positionIsClear(robot, x, z) {
-    if (robot.kind !== 'sky_miner' && NAVIGATION_OBSTACLES.some(obstacle => Math.hypot(x - obstacle.x, z - obstacle.z) < obstacle.radius)) return false;
-    if (robot.kind !== 'sky_miner' && this.nodes.some(node => node.remaining > 0 && Math.hypot(x - node.x, z - node.z) < .72)) return false;
-    if (this.technologyEffects.sceneUnlocks?.includes('survey_beacon') && Math.hypot(x + 3.1, z - 1.9) < .4) return false;
-    if (this.technologyEffects.sceneUnlocks?.includes('refinery') && Math.hypot(x - 3.2, z + 1.9) < .75) return false;
+    if (!this.positionIsStaticallyClear(robot, x, z)) return false;
     return this.robots.every(other => other.id === robot.id || Math.hypot(x - other.x, z - other.z) >= .65);
   }
 

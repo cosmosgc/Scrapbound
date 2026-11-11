@@ -32,6 +32,7 @@ return [
         ['id' => 'aerial_mining', 'name' => 'Aerial extraction', 'description' => 'Unlock the fast flying Skydrill. Its flight is quick, but its small drill extracts slowly.', 'cost' => 160, 'currency' => 'credits', 'prerequisites' => ['quarry_boring'], 'effects' => ['unlockBotKinds' => ['sky_miner']]],
         ['id' => 'haul_network', 'name' => 'Haul network', 'description' => 'Unlock a dedicated logistics bot that collects mined drops and delivers them to the depot.', 'cost' => 14, 'currency' => 'scrap', 'prerequisites' => ['quarry_boring'], 'effects' => ['unlockBotKinds' => ['cargo_hauler']]],
         ['id' => 'field_support', 'name' => 'Field support array', 'description' => 'Unlock support bots that boost nearby miners and haulers.', 'cost' => 24, 'currency' => 'scrap', 'prerequisites' => ['haul_network', 'aerial_mining'], 'effects' => ['unlockBotKinds' => ['buffer_bot']]],
+        ['id' => 'remote_operations', 'name' => 'Remote operations', 'description' => 'Keep server-run mining active for one additional hour while you are away.', 'cost' => 180, 'currency' => 'credits', 'prerequisites' => ['refinery'], 'effects' => ['offlineSecondsBonus' => 3600]],
     ],
     'rewards' => [
         'creditsPerCargo' => 5,

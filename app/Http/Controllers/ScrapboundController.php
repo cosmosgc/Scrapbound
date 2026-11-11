@@ -302,7 +302,7 @@ class ScrapboundController extends Controller
 
             $result = [
                 'ok' => true,
-                'core_version' => 5,
+                'core_version' => 6,
                 'seed' => $input['seed'],
                 'ticks' => $input['ticks'],
                 'payouts' => $resolved['payouts'],

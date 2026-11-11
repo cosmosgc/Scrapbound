@@ -155,8 +155,11 @@ class GameCatalog
                 $gridCells[$cell] = true;
             }
             $effects = $node['effects'];
-            if (array_diff(array_keys($effects), ['unlockResources', 'unlockZones', 'unlockCapabilities', 'unlockPrograms', 'unlockModules', 'unlockBotKinds', 'spawnWeightMultipliers', 'deliveryValueMultipliers', 'stockMultipliers', 'respawnTimeMultipliers', 'sceneUnlocks'])) {
+            if (array_diff(array_keys($effects), ['unlockResources', 'unlockZones', 'unlockCapabilities', 'unlockPrograms', 'unlockModules', 'unlockBotKinds', 'spawnWeightMultipliers', 'deliveryValueMultipliers', 'stockMultipliers', 'respawnTimeMultipliers', 'sceneUnlocks', 'offlineSecondsBonus'])) {
                 throw new DomainException('Technology node contains an unsupported effect.');
+            }
+            if (isset($effects['offlineSecondsBonus']) && (! is_int($effects['offlineSecondsBonus']) || $effects['offlineSecondsBonus'] < 0 || $effects['offlineSecondsBonus'] > 14400)) {
+                throw new DomainException('Technology offline time bonus must be an integer between 0 and 14400 seconds.');
             }
             foreach (['unlockResources', 'unlockZones', 'unlockCapabilities', 'unlockPrograms', 'unlockModules', 'unlockBotKinds', 'sceneUnlocks'] as $listKey) {
                 $values = $effects[$listKey] ?? [];

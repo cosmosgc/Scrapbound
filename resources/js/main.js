@@ -102,9 +102,11 @@ let pressedKeys = new Set();
 let controlTargetId = 0;
 document.addEventListener('scrapbound-control-config', event => { controlState = event.detail; });
 scene.onGroundClick = (x, z) => {
-  const profileName = controlState.assignments[String(controlTargetId)] || 'Default';
-  if (controlState.profiles[profileName]?.mode !== 'mouse') return;
-  simulation.manualDestination(controlTargetId, x, z);
+  let activeControls = controlState;
+  try { activeControls = JSON.parse(localStorage.getItem(CONTROL_STORAGE)) || activeControls; } catch {}
+  const profileName = activeControls.assignments[String(controlTargetId)] || 'Default';
+  if (activeControls.profiles[profileName]?.mode !== 'mouse') return;
+  if (simulation.manualDestination(controlTargetId, x, z)) render();
 };
 window.addEventListener('keydown', event => {
   if (!event.key || event.target.matches('input,textarea,select,[contenteditable="true"]')) return;
@@ -258,6 +260,16 @@ async function loadPlayerJobs() {
   await loadPlayerMissions();
 }
 
+function formatCompactDuration(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours && minutes) return `${hours}h ${minutes}m`;
+  if (hours) return `${hours}h`;
+  if (minutes) return `${minutes}m`;
+  return `${total}s`;
+}
+
 async function settleOfflineProgress() {
   if (!account) return;
   const result = await apiRequest('idle_settle', 'POST', { request_key: crypto.randomUUID() });
@@ -270,7 +282,7 @@ async function settleOfflineProgress() {
     technologyState = result.technology;
     simulation.setResourceDefinitions(result.technology.resources || []);
     simulation.setTechnologyEffects(result.technology.effects || {});
-    scene.setTechnology(result.technology.effects?.sceneUnlocks || []);
+    scene.setTechnology(result.technology.effects?.sceneUnlocks || [], result.technology.effects?.unlockZones || []);
   }
   if (Number.isInteger(result.world_seed) && simulation.setWorldSeed(result.world_seed)) worldSeed = result.world_seed;
   if (result.snapshot?.nodes) simulation.applyWorldSnapshot(result.snapshot.nodes, result.snapshot.drops || []);
@@ -287,9 +299,10 @@ async function settleOfflineProgress() {
   if (payouts.length) serverDeliveries = [...payouts, ...serverDeliveries].slice(0, 3);
   lastWalletSyncAt = Date.now();
   const credited = Number(result.credited_seconds) || 0;
+  const offlineCap = formatCompactDuration(result.offline_cap_seconds);
   serverSimulationStatus = credited > 0
-    ? `Offline bots worked ${Math.floor(credited / 60)}m · ${payouts.reduce((sum, payout) => sum + payout.deliveryCount, 0)} depot deliveries${result.capped ? ' · catch-up capped' : ''}.`
-    : 'Offline systems ready · bots earn only after depot delivery.';
+    ? `Offline bots worked ${formatCompactDuration(credited)} · ${payouts.reduce((sum, payout) => sum + payout.deliveryCount, 0)} depot deliveries · ${result.capped ? `catch-up capped at ${offlineCap}` : `offline limit ${offlineCap}`}.`
+    : `Offline systems ready · up to ${offlineCap} · bots earn only after depot delivery.`;
   render();
   return true;
 }
@@ -1095,7 +1108,7 @@ function renderTechnologyTree() {
     economy.state.scrap = Number(result.wallet.scrap);
     simulation.setResourceDefinitions(technologyState.resources || []);
     simulation.setTechnologyEffects(technologyState.effects || {});
-    scene.setTechnology(technologyState.effects?.sceneUnlocks || []);
+    scene.setTechnology(technologyState.effects?.sceneUnlocks || [], technologyState.effects?.unlockZones || []);
     simulation.setWorldSeed(worldSeed);
     render();
     toast(`${result.technology.nodes.find(node => node.id === nodeId)?.name || 'Technology'} researched. New world content is active.`);

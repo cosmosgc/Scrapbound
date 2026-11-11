@@ -16,6 +16,7 @@ export const TECHNOLOGY_EFFECTS = [
   { id: 'deliveryValueMultipliers', kind: 'map', label: 'Delivery value multipliers', description: 'Adjust resource delivery value.' },
   { id: 'stockMultipliers', kind: 'map', label: 'Stock multipliers', description: 'Adjust resource site stock.' },
   { id: 'respawnTimeMultipliers', kind: 'map', label: 'Respawn time multipliers', description: 'Adjust resource restock time.' },
+  { id: 'offlineSecondsBonus', kind: 'number', label: 'Offline time bonus', description: 'Add bounded server-side offline catch-up time in seconds.' },
 ];
 
 function renderEffects(value, path) {
@@ -25,6 +26,8 @@ function renderEffects(value, path) {
     if (!definition) return `<div class="effect-config"><b>${escapeHtml(label(effectKey))}</b><span class="effect-warning">Unsupported effect — remove it or use Advanced JSON.</span><button type="button" class="text-action danger" data-editor-op="remove-effect" data-editor-path="${pathAttribute([...path, effectKey])}">Remove</button></div>`;
     return `<div class="effect-config"><div class="effect-config-heading"><div><b>${escapeHtml(definition.label)}</b><small>${escapeHtml(definition.description)}</small></div><button type="button" class="text-action danger" data-editor-op="remove-effect" data-editor-path="${pathAttribute([...path, effectKey])}">Remove</button></div>${definition.kind === 'list'
       ? `<label class="structured-field"><span>IDs · comma separated</span><input type="text" data-editor-path="${pathAttribute([...path, effectKey])}" data-editor-type="list" value="${escapeHtml(effectValue.join(', '))}" placeholder="e.g. ${effectKey === 'unlockCapabilities' ? 'remote_drone_ops' : 'new_content_id'}"></label>`
+      : definition.kind === 'number'
+        ? `<label class="structured-field"><span>Additional seconds · maximum 14400</span><input type="number" min="0" max="14400" step="1" data-editor-path="${pathAttribute([...path, effectKey])}" data-editor-type="number" value="${escapeHtml(effectValue)}"></label>`
       : `<div class="effect-map-list">${Object.entries(effectValue).map(([resourceId, multiplier]) => `<div class="effect-map-row"><label class="structured-field"><span>Resource ID</span><input type="text" data-editor-path="${pathAttribute([...path, effectKey, resourceId, '__resourceKey'])}" data-editor-type="map-key" value="${escapeHtml(resourceId)}" placeholder="alloy"></label><label class="structured-field"><span>Multiplier</span><input type="number" min="${effectKey === 'respawnTimeMultipliers' ? '.1' : '0'}" max="5" step="any" data-editor-path="${pathAttribute([...path, effectKey, resourceId])}" data-editor-type="number" value="${escapeHtml(multiplier)}"></label><button type="button" class="text-action danger" data-editor-op="remove-effect-map-entry" data-editor-path="${pathAttribute([...path, effectKey, resourceId])}">Remove</button></div>`).join('')}<button type="button" class="text-action" data-editor-op="add-effect-map-entry" data-editor-path="${pathAttribute([...path, effectKey])}">＋ Add resource multiplier</button></div>`}</div>`;
   }).join('')}`;
   return `<fieldset class="structured-object technology-effects"><legend>Gameplay effects</legend>${picker}<div class="effect-config-list">${Object.keys(value).length ? '' : '<div class="effect-empty">No effects configured. Search or choose an effect above to add one.</div>'}</div></fieldset>`;
@@ -126,7 +129,7 @@ export function mutateTechnologyEffect(content, path, operation, effectKey = '')
   if (operation === 'add-effect') {
     const definition = TECHNOLOGY_EFFECTS.find(effect => effect.id === effectKey);
     if (!definition || Object.hasOwn(target, effectKey)) return false;
-    target[effectKey] = definition.kind === 'list' ? [] : {};
+    target[effectKey] = definition.kind === 'list' ? [] : definition.kind === 'number' ? 0 : {};
     return true;
   } else if (operation === 'remove-effect') {
     const effectKey = path.at(-1);
