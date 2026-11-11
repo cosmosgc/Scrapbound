@@ -122,6 +122,41 @@ test('mouse pilot sends the selected bot to a clicked workshop point', async ({ 
   await expect(page.locator('#crew-status')).toContainText('Driving to mouse waypoint', { timeout: 5_000 });
 });
 
+test('signed-in technology loads independently when saved jobs are unavailable', async ({ page, baseURL }) => {
+  let technologyRequests = 0;
+  await page.route('**/api.php?*', async route => {
+    const requestUrl = new URL(route.request().url());
+    const action = requestUrl.searchParams.get('action');
+    if (action === 'status') {
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+        ok: true, player: { id: 1, username: 'ResearchPilot', can_manage_catalog: false }, csrf: 'test-csrf-token',
+      }) });
+    } else if (action === 'technology') {
+      technologyRequests++;
+      if (technologyRequests === 1) {
+        await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'Technology service temporarily unavailable.' }) });
+      } else {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+          ok: true, catalog_version: 1, owned_node_ids: [], resources: [], effects: {},
+          nodes: [{ id: 'field_science', name: 'Field science', description: 'A starter research node.', prerequisites: [], cost: 0, currency: 'credits', effects: {}, owned: false, available: true }],
+        }) });
+      }
+    } else if (action === 'jobs') {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'Jobs temporarily unavailable.' }) });
+    } else {
+      await route.continue();
+    }
+  });
+
+  await page.goto(new URL('factory', baseURL).toString());
+  await page.locator('a[data-route="/technology"]').click();
+  await expect(page.locator('#technology-tree')).toContainText('Technology could not be loaded');
+  await page.locator('#technology-tree [data-tech-retry]').click();
+  await expect(page.locator('#technology-tree')).toContainText('Field science');
+  await expect(page.locator('#technology-tree')).not.toContainText('Loading server technology');
+  expect(technologyRequests).toBe(2);
+});
+
 test('fullscreen workshop exposes quick-purchase buttons outside the canvas', async ({ page, baseURL }) => {
   await page.goto(new URL('factory', baseURL).toString());
   await page.locator('#scene-fullscreen').click();

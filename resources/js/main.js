@@ -37,6 +37,7 @@ let localSimulationValues = { credits: economy.state.credits, scrap: economy.sta
 let localSimulationAccount = null;
 let worldSeed = crypto.getRandomValues(new Uint32Array(1))[0];
 let technologyState = null;
+let technologyLoadError = null;
 let technologyPreview = [];
 const simulation = new SalvageSimulation((resource, amount) => {
   if (!account) {
@@ -249,7 +250,8 @@ function applyServerJobs(data) {
 }
 
 async function loadPlayerJobs() {
-  if (!account) { playerJobs = null; playerMissionState = null; technologyState = null; selectedCooperativeJobId = null; serverDeliveries = []; serverSimulationStatus = ''; walletSyncStatus = 'Not synced yet'; lastWalletSyncAt = 0; localSimulationAccount = null; localSimulationValues = { credits: economy.state.credits, scrap: economy.state.scrap }; render(); renderInventory(null); await loadCooperativeJobs(); return; }
+  if (!account) { playerJobs = null; playerMissionState = null; technologyState = null; technologyLoadError = null; selectedCooperativeJobId = null; serverDeliveries = []; serverSimulationStatus = ''; walletSyncStatus = 'Not synced yet'; lastWalletSyncAt = 0; localSimulationAccount = null; localSimulationValues = { credits: economy.state.credits, scrap: economy.state.scrap }; render(); renderInventory(null); await loadCooperativeJobs(); return; }
+  await loadTechnology();
   if (!localSaveCaptured) { localSaveBackup = localStorage.getItem('scrapbound.save.v1'); localSaveCaptured = true; }
   const result = await apiRequest('jobs');
   if (!result.ok) { toast(result.error || 'Could not load saved robot jobs.'); return; }
@@ -280,6 +282,7 @@ async function settleOfflineProgress() {
   }
   if (result.technology) {
     technologyState = result.technology;
+    technologyLoadError = null;
     simulation.setResourceDefinitions(result.technology.resources || []);
     simulation.setTechnologyEffects(result.technology.effects || {});
     scene.setTechnology(result.technology.effects?.sceneUnlocks || [], result.technology.effects?.unlockZones || []);
@@ -304,6 +307,24 @@ async function settleOfflineProgress() {
     ? `Offline bots worked ${formatCompactDuration(credited)} · ${payouts.reduce((sum, payout) => sum + payout.deliveryCount, 0)} depot deliveries · ${result.capped ? `catch-up capped at ${offlineCap}` : `offline limit ${offlineCap}`}.`
     : `Offline systems ready · up to ${offlineCap} · bots earn only after depot delivery.`;
   render();
+  return true;
+}
+
+async function loadTechnology() {
+  technologyLoadError = null;
+  renderTechnologyTree();
+  const result = await apiRequest('technology');
+  if (!result.ok || !Array.isArray(result.nodes)) {
+    technologyLoadError = result.error || 'The server returned an invalid technology response.';
+    renderTechnologyTree();
+    return false;
+  }
+  technologyState = result;
+  technologyLoadError = null;
+  simulation.setResourceDefinitions(result.resources || []);
+  simulation.setTechnologyEffects(result.effects || {});
+  scene.setTechnology(result.effects?.sceneUnlocks || [], result.effects?.unlockZones || []);
+  renderTechnologyTree();
   return true;
 }
 
@@ -993,8 +1014,12 @@ function renderUpgrades() {
 function renderTechnologyTree() {
   const host = $('technology-tree');
   if (account && !technologyState) {
-    delete host.dataset.renderKey;
-    host.innerHTML = '<div class="panel-note">Loading server technology…</div>';
+    const renderKey = `server-state:${technologyLoadError || 'loading'}`;
+    if (host.dataset.renderKey === renderKey) return;
+    host.dataset.renderKey = renderKey;
+    host.innerHTML = technologyLoadError
+      ? `<div class="panel-note">Technology could not be loaded: ${safe(technologyLoadError)} <button type="button" class="button" data-tech-retry>Retry</button></div>`
+      : '<div class="panel-note">Loading server technology…</div>';
     return;
   }
   const nodes = account ? technologyState.nodes || [] : technologyPreview;
@@ -1114,6 +1139,10 @@ function renderTechnologyTree() {
     toast(`${result.technology.nodes.find(node => node.id === nodeId)?.name || 'Technology'} researched. New world content is active.`);
   }));
 }
+
+$('technology-tree').addEventListener('click', event => {
+  if (event.target.closest('[data-tech-retry]')) loadTechnology();
+});
 
 function renderMissions() {
   if (account) {
