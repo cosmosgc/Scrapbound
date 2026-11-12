@@ -47,6 +47,32 @@ Object.assign(ptBR, {
   'Built for the long haul': 'Feito para durar', 'Follow robot': 'Seguir robô', 'LOCAL SIMULATION · NOT SPENDABLE': 'SIMULAÇÃO LOCAL · NÃO UTILIZÁVEL',
   'ACTIVE SEASON LEAGUE': 'LIGA DA TEMPORADA ATUAL', 'BROWSER SAVE': 'SALVO NO NAVEGADOR', 'COSMETIC ONLY': 'APENAS COSMÉTICO',
   'Find it ·': 'Encontrar ·', 'Open the quarry zone': 'Abrir a zona da pedreira', 'Unlocked': 'Desbloqueado',
+  'Geological survey': 'Pesquisa geológica',
+  'Open the quarry zone, unlock alloy deposits, increase their spawn weight, and build a survey beacon.': 'Abra a zona da pedreira, desbloqueie depósitos de liga, aumente a chance de encontrá-los e construa um sinalizador de pesquisa.',
+  'Field refinery': 'Refinaria de campo',
+  'Build a refinery, increase alloy value and site stock, and shorten its restock cycle.': 'Construa uma refinaria, aumente o valor e o estoque de ligas e reduza o tempo de reposição.',
+  'Deep veins': 'Veios profundos',
+  'Improve the chance of finding alloy deposits across the quarry.': 'Aumente a chance de encontrar depósitos de liga por toda a pedreira.',
+  'Sorting rig': 'Esteira de triagem',
+  'Recover more value from each delivered alloy load.': 'Obtenha mais valor em cada carga de liga entregue.',
+  'Quarry boring': 'Perfuração da pedreira',
+  'Unlock a dedicated ground miner for breaking resource blocks.': 'Desbloqueie um minerador terrestre especializado em quebrar blocos de recursos.',
+  'Aerial extraction': 'Extração aérea',
+  'Unlock the fast flying Skydrill. Its flight is quick, but its small drill extracts slowly.': 'Desbloqueie o Skydrill, um voador veloz. Ele voa rápido, mas sua broca pequena extrai recursos devagar.',
+  'Haul network': 'Rede de transporte',
+  'Unlock a dedicated logistics bot that collects mined drops and delivers them to the depot.': 'Desbloqueie um robô logístico que coleta os recursos minerados e os leva ao depósito.',
+  'Field support array': 'Rede de suporte de campo',
+  'Unlock support bots that boost nearby miners and haulers.': 'Desbloqueie robôs de suporte que melhoram mineradores e transportadores próximos.',
+  'Remote operations': 'Operações remotas',
+  'Keep server-run mining active for one additional hour while you are away.': 'Mantenha a mineração do servidor ativa por mais uma hora enquanto estiver ausente.',
+  'Big ideas for little robots': 'Grandes ideias para pequenos robôs',
+  'Honeycomb tree': 'Árvore hexagonal', 'Discovery cards': 'Cartões de descoberta',
+  'Research completed': 'Pesquisa concluída', 'Search technologies': 'Pesquisar tecnologias', 'Try mining, bots, alloy…': 'Tente mineração, robôs, ligas…',
+  'Sign in to research and save this discovery.': 'Entre para pesquisar e salvar esta descoberta.',
+  'alloy': 'liga', 'block_miner': 'minerador de blocos', 'sky_miner': 'minerador aéreo',
+  'cargo_hauler': 'transportador de carga', 'buffer_bot': 'robô de suporte',
+  'survey_beacon': 'sinalizador de pesquisa', 'quarry': 'pedreira',
+  'Already researched': 'Já pesquisada',
   'Rookie': 'Iniciante', 'Ready': 'Pronto', 'REWARD · ¢ 30 + ▧ 12': 'RECOMPENSA · ¢ 30 + ▧ 12', 'REWARD ¢ 25 + ▧ 15': 'RECOMPENSA ¢ 25 + ▧ 15',
   'Idle bots? Check their routine and available resource targets.': 'Robôs parados? Verifique a rotina e os recursos disponíveis.',
   'Scrap hound': 'Cão de sucata', 'Auto-fabricator': 'Auto fabricante', 'Quarry borer': 'Perfurador de pedreira', 'Cargo mule': 'Transportador de carga', 'Field buffer': 'Suporte de campo',
@@ -79,6 +105,42 @@ function localizedValue(value) {
   if (botLabel) return `Robô ${botLabel[1]} · ${ptBR[botLabel[2]] || botLabel[2]}`;
   const unitLabel = value.match(/^UNIT (\d+)$/);
   if (unitLabel) return `ROBÔ ${unitLabel[1]}`;
+  const discoverySummary = value.match(/^(\d+) of (\d+) discoveries researched · (\d+) unlocked to explore$/);
+  if (discoverySummary) return `${discoverySummary[1]} de ${discoverySummary[2]} descobertas pesquisadas · ${discoverySummary[3]} disponíveis`;
+  const prerequisite = value.match(/^Discover first: (.+)$/);
+  if (prerequisite) return `Pesquise antes: ${prerequisite[1].split(', ').map(name => ptBR[name] || name).join(', ')}`;
+  const nodeLabel = value.match(/^(.+): (RESEARCHED|READY TO RESEARCH|NEED MORE RESOURCES|LOCKED)$/);
+  if (nodeLabel) return `${ptBR[nodeLabel[1]] || nodeLabel[1]}: ${ptBR[nodeLabel[2]] || nodeLabel[2]}`;
+  const costStatus = value.match(/^(\d+) (credits|scrap) · (select node to research|unlock prerequisite first|insufficient resources)$/);
+  if (costStatus) {
+    const currency = costStatus[2] === 'credits' ? 'créditos' : 'sucatas';
+    const action = { 'select node to research': 'selecione para pesquisar', 'unlock prerequisite first': 'desbloqueie o pré-requisito', 'insufficient resources': 'recursos insuficientes' }[costStatus[3]];
+    return `${costStatus[1]} ${currency} · ${action}`;
+  }
+  const multiplier = value.match(/^([a-z_]+) (spawn|value|stock|restock time) ×(.+)$/);
+  if (multiplier) {
+    const kind = { spawn: 'chance de encontrar', value: 'valor', stock: 'estoque', 'restock time': 'tempo de reposição' }[multiplier[2]];
+    return `${ptBR[multiplier[1]] || multiplier[1]} · ${kind} ×${multiplier[3]}`;
+  }
+  const unlock = value.match(/^Unlocks ([a-z_ ]+) (bot|program|module)$/);
+  if (unlock) {
+    const term = unlock[1].trim();
+    const localizedTerm = ptBR[term] || ptBR[term.replaceAll(' ', '_')] || term;
+    return `Desbloqueia ${unlock[2] === 'bot' ? 'robô ' : unlock[2] === 'program' ? 'programa ' : 'módulo '}${localizedTerm}`;
+  }
+  const enables = value.match(/^Enables ([a-z_ ]+)$/);
+  if (enables) {
+    const term = enables[1].trim();
+    return `Habilita ${ptBR[term] || ptBR[term.replaceAll(' ', '_')] || term}`;
+  }
+  const builds = value.match(/^Builds ([a-z_ ]+)$/);
+  if (builds) {
+    const term = builds[1].trim();
+    return `Constrói ${ptBR[term] || ptBR[term.replaceAll(' ', '_')] || term}`;
+  }
+  if (value === '✓ COMPLETE') return '✓ CONCLUÍDA';
+  const researchToast = value.match(/^(.+) researched\. New world content is active\.$/);
+  if (researchToast) return `${ptBR[researchToast[1]] || researchToast[1]} pesquisada. O novo conteúdo já está ativo.`;
   return value;
 }
 
@@ -120,6 +182,8 @@ function localizeNode(root) {
 }
 
 export function getLocale() { return activeLocale; }
+
+export function translateText(value) { return localizedValue(String(value ?? '')); }
 
 export function formatNumber(value, options = {}) {
   return new Intl.NumberFormat(activeLocale, options).format(value);

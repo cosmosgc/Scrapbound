@@ -72,15 +72,26 @@ test('Brazilian Portuguese is the default UI language and English remains select
   await expect(page.locator('.resource-strip')).toContainText('ENTREGAS DOS ROBÔS');
   await expect(page).toHaveTitle('Chão de fábrica — Scrapbound');
 
+  await page.locator('a[data-route="/technology"]').click();
+  await expect(page.locator('#technology-tree')).toContainText('Pesquisa geológica');
+  await expect(page.locator('#technology-tree')).toContainText('Abra a zona da pedreira');
+  await expect(page.locator('#technology-tree')).toContainText('Grandes ideias para pequenos robôs');
+  const technologySearch = page.locator('.research-tools input[type="search"]');
+  await technologySearch.fill('geológica');
+  await expect(page.locator('[data-tech-node="prospecting"]')).toBeVisible();
+  await expect(page.locator('[data-tech-node="deep_veins"]')).toBeHidden();
+  await technologySearch.fill('');
+
   await page.locator('#language-select').selectOption('en');
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
-  await expect(page.locator('.nav-link[data-route="/factory"]')).toContainText('Factory');
+  await expect(page.locator('#technology-tree')).toContainText('Geological survey');
+  await expect(page.locator('#technology-tree')).toContainText('Open the quarry zone');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
-  await expect(page.locator('.nav-link[data-route="/factory"]')).toContainText('Factory');
+  await expect(page.locator('#technology-tree')).toContainText('Geological survey');
 
   await page.locator('#language-select').selectOption('pt-BR');
-  await expect(page.locator('.nav-link[data-route="/factory"]')).toContainText('Fábrica');
+  await expect(page.locator('#technology-tree')).toContainText('Pesquisa geológica');
 });
 
 test('accelerated browser playtest earns resources from bot deliveries', async ({ page, baseURL }) => {

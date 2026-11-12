@@ -1,3 +1,4 @@
+import { translateText } from './i18n.js';
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export function enhanceResearch(host, nodes, signedIn) {
   const toolbar=document.createElement('div');toolbar.className='research-toolbar';
@@ -12,7 +13,8 @@ export function enhanceResearch(host, nodes, signedIn) {
     let visible=0;
     host.querySelectorAll('[data-tech-node]').forEach(card=>{
       const node=nodes.find(n=>n.id===card.dataset.techNode);
-      const matches=`${node.name} ${node.description} ${JSON.stringify(node.effects || {})}`.toLowerCase().includes(query.value.trim().toLowerCase())&&(filter.value==='all'||filter.value==='owned'&&node.owned||filter.value==='ready'&&node.available&&!node.owned||filter.value==='locked'&&!node.available&&!node.owned);
+      const searchable=`${node.name} ${node.description} ${translateText(node.name)} ${translateText(node.description)} ${JSON.stringify(node.effects || {})}`.toLowerCase();
+      const matches=searchable.includes(query.value.trim().toLowerCase())&&(filter.value==='all'||filter.value==='owned'&&node.owned||filter.value==='ready'&&node.available&&!node.owned||filter.value==='locked'&&!node.available&&!node.owned);
       card.hidden=!matches;if(matches)visible++;
     });toolbar.querySelector('.research-empty').hidden=visible>0;
   };
