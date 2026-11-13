@@ -171,6 +171,96 @@ test('cargo and cache conditions control which robot instructions execute', () =
   assert.equal(emptySiteSim.robots[0].status, 'No matching salvage nearby');
 });
 
+test('mining programs create visible voxel drops that a separate action can haul and deliver', () => {
+  const deliveries = [];
+  const sim = new SalvageSimulation((resource, amount) => deliveries.push({ resource, amount }));
+  sim.syncCrew({ block_miner: 1 });
+  sim.deploy([{ action: 'mine', resource: 'scrap' }, { action: 'collect_drops', resource: 'scrap' }]);
+
+  for (let tick = 0; tick < 3000; tick++) sim.tick(.1);
+
+  const events = sim.snapshot().events;
+  assert.ok(events.some(event => event.type === 'block_break'));
+  assert.ok(events.some(event => event.type === 'pickup'));
+  assert.ok(deliveries.some(delivery => delivery.resource === 'scrap' && delivery.amount > 0));
+});
+
+test('assist actions let a buffer bot follow active teammates for a bounded duration', () => {
+  const sim = new SalvageSimulation();
+  sim.syncCrew({ block_miner: 1, buffer_bot: 1 });
+  sim.deployRole('buffer_bot', [{ action: 'assist', seconds: 5 }]);
+  for (let tick = 0; tick < 20; tick++) sim.tick(.1);
+  assert.equal(sim.robots[1].phase, 'assist');
+  assert.match(sim.robots[1].status, /Assisting unit 01/);
+  assert.ok(sim.robots[1].assistTime < 5);
+});
+
+test('Blockly specialist nodes compile mining, drop, assist, and expanded condition branches', () => {
+  const program = compileProgram(workspace(block('sb_if_full', {
+    inputs: { DO: block('sb_return_home') },
+    next: block('sb_mine', { fields: { RESOURCE: 'alloy' }, next: block('sb_collect_drops', { fields: { RESOURCE: 'alloy' }, next: block('sb_assist', { fields: { SECONDS: 7 } }) }) }),
+  })));
+  assert.equal(program.error, '');
+  assert.deepEqual(program.program, [
+    { action: 'if_full', skip: 1 }, { action: 'return_home' }, { action: 'mine', resource: 'alloy' },
+    { action: 'collect_drops', resource: 'alloy' }, { action: 'assist', seconds: 7 },
+  ]);
+  assert.equal(parseProgram(program.program).length, 5);
+  assert.deepEqual(parseProgram([{ action: 'assist', seconds: 31 }]), []);
+  assert.deepEqual(parseProgram([{ action: 'if_drop', resource: 'scrap', skip: 2 }]), []);
+});
+
+test('resource seek, role-aware cargo logic, and bounded repeats compile to safe instructions', () => {
+  const branch = block('sb_if_robot_type', {
+    fields: { KIND: 'block_miner' },
+    inputs: { DO: block('sb_if_cargo_percent', { fields: { PERCENT: '75' }, inputs: { DO: block('sb_return_home') } }) },
+  });
+  const root = block('sb_repeat', {
+    fields: { TIMES: 3 },
+    inputs: { DO: block('sb_seek_resource', { fields: { RESOURCE: 'alloy' } }) },
+    next: branch,
+  });
+  const result = compileProgram(workspace(root));
+  assert.equal(result.error, '');
+  assert.deepEqual(result.program, [
+    { action: 'seek', resource: 'alloy' }, { action: 'seek', resource: 'alloy' }, { action: 'seek', resource: 'alloy' },
+    { action: 'if_robot_type', kind: 'block_miner', skip: 2 },
+    { action: 'if_cargo_percent', percent: 75, skip: 1 }, { action: 'return_home' },
+  ]);
+  assert.equal(parseProgram(result.program).length, 6);
+  assert.deepEqual(parseProgram([{ action: 'if_robot_type', kind: 'not_a_bot', skip: 0 }]), []);
+
+  let longRoutine = null;
+  for (let index = 0; index < 9; index++) longRoutine = block('sb_wait', { fields: { SECONDS: 1 }, next: longRoutine });
+  const oversized = compileProgram(workspace(block('sb_repeat', { fields: { TIMES: 5 }, inputs: { DO: longRoutine } })));
+  assert.match(oversized.error, /limited to 40 instructions/);
+  let nestedRoutine = block('sb_wait', { fields: { SECONDS: 1 } });
+  for (let depth = 0; depth < 5; depth++) nestedRoutine = block('sb_repeat', { inputs: { DO: nestedRoutine } });
+  assert.match(compileProgram(workspace(nestedRoutine)).error, /nested 4 levels deep/);
+});
+
+test('cargo percentage branches use the selected robot type capacity', () => {
+  const sim = new SalvageSimulation();
+  sim.syncCrew({ fabricator: 1 });
+  sim.deploy([
+    { action: 'if_cargo_percent', percent: 50, skip: 1 },
+    { action: 'wait', seconds: 20 },
+    { action: 'seek', resource: 'credits' },
+  ]);
+  sim.robots[0].cargo = 3;
+  sim.tick(.1);
+  assert.equal(sim.robots[0].status, 'Waiting');
+});
+
+test('seek resource action retains its chosen target for the following scan and collect steps', () => {
+  const deliveries = [];
+  const sim = new SalvageSimulation((resource, amount) => deliveries.push({ resource, amount }));
+  sim.syncCrew({ scavenger: 1 });
+  sim.deploy([{ action: 'seek', resource: 'scrap' }, { action: 'scan' }, { action: 'collect', resource: 'scrap' }]);
+  for (let tick = 0; tick < 1000; tick++) sim.tick(.1);
+  assert.ok(deliveries.some(delivery => delivery.resource === 'scrap'));
+});
+
 test('Blockly navigation instructions and manual inputs move bots within expanded field bounds', () => {
   const moveProgram = compileProgram(workspace(block('sb_move_to', { fields: { X: 2, Z: -1 }, next: block('sb_return_home') })));
   assert.deepEqual(moveProgram.program, [{ action: 'move_to', x: 2, z: -1 }, { action: 'return_home' }]);

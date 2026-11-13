@@ -150,6 +150,7 @@ export class SalvageSimulation {
         id: i, kind, x: HOME.x + (i % 3 - 1) * .85, z: HOME.z + 1.1 + Math.floor(i / 3) * .8,
         program: (this.unitPrograms[i] || this.rolePrograms[kind] || this.activeProgram).map(step => ({ ...step })), command: 0, phase: 'idle', targetId: null,
         cargo: 0, cargoType: 'credits', work: 0, wait: 0, status: 'Ready', automation: !this.unitPrograms[i] && !this.rolePrograms[kind] && JSON.stringify(this.activeProgram) === JSON.stringify(DEFAULT_PROGRAM),
+        programTask: null, assistTime: 0,
         navigationGoal: null, bestDistance: null, stalledTicks: 0,
         navigationPathGoal: null, navigationPath: [], navigationPathReady: false, navigationPathBlocked: false,
         manualWaypointActive: false,
@@ -212,6 +213,7 @@ export class SalvageSimulation {
   applyProgram(robot, program) {
     robot.program = program.map(step => ({ ...step }));
     robot.command = 0; robot.phase = 'idle'; robot.targetId = null; robot.cargo = 0;
+    robot.programTask = null; robot.assistTime = 0;
     robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0;
     this.resetNavigationPath(robot);
     robot.status = program.length ? 'Program deployed' : 'No program loaded';
@@ -279,6 +281,10 @@ export class SalvageSimulation {
       this.stepAutomaticRobot(robot, dt);
       return;
     }
+    if (robot.phase === 'assist') {
+      this.stepAssist(robot, dt);
+      return;
+    }
     if (!robot.program.length && robot.phase === 'idle') { robot.status = 'Waiting for a program'; return; }
     let safety = 0;
     while (robot.phase === 'idle' && safety++ < 8) {
@@ -288,6 +294,10 @@ export class SalvageSimulation {
         const target = this.findSite(robot, collectStep?.resource || 'credits');
         if (!target) { robot.status = 'No matching salvage nearby'; return; }
         robot.targetId = target.id; robot.phase = 'travel'; robot.status = `Driving to ${target.resource} cache`;
+      } else if (step.action === 'seek') {
+        const target = this.findSite(robot, step.resource);
+        if (!target) { robot.status = `No ${step.resource} site available`; return; }
+        robot.targetId = target.id; robot.programTask = 'seek'; robot.phase = 'travel'; robot.status = `Seeking ${step.resource} site`;
       } else if (step.action === 'scan') {
         const target = this.target(robot);
         if (!target || target.remaining <= 0) { this.next(robot); continue; }
@@ -297,6 +307,20 @@ export class SalvageSimulation {
         if (!target || !target.scanned || target.remaining <= 0) { this.next(robot); continue; }
         robot.cargoType = step.resource; robot.phase = 'collect'; robot.work = 0;
         robot.status = `Collecting ${step.resource}`;
+      } else if (step.action === 'mine') {
+        const target = this.findSite(robot, step.resource);
+        if (!target) { robot.status = `No ${step.resource} block available`; return; }
+        robot.targetId = target.id; robot.programTask = 'mine'; robot.phase = 'travel';
+        robot.status = `Driving to ${step.resource} block`;
+      } else if (step.action === 'collect_drops') {
+        const target = this.findDrop(robot, step.resource);
+        if (!target) { robot.status = `No ${step.resource} drops available`; return; }
+        robot.targetId = target.id; robot.programTask = 'pickup'; robot.phase = 'travel';
+        robot.status = `Driving to ${step.resource} drop`;
+      } else if (step.action === 'assist') {
+        robot.assistTime = step.seconds; robot.phase = 'assist'; robot.status = 'Looking for a teammate to assist';
+        this.stepAssist(robot, dt);
+        return;
       } else if (step.action === 'move_to') {
         robot.destination = { x: step.x, z: step.z };
         robot.targetId = null; robot.phase = 'travel'; robot.status = `Moving to (${step.x}, ${step.z})`;
@@ -308,8 +332,24 @@ export class SalvageSimulation {
         if (robot.cargo > 0) this.next(robot);
         else this.next(robot, step.skip + 1);
         continue;
+      } else if (step.action === 'if_full') {
+        if (robot.cargo >= this.capacity(robot)) this.next(robot);
+        else this.next(robot, step.skip + 1);
+        continue;
+      } else if (step.action === 'if_cargo_percent') {
+        if (robot.cargo / this.capacity(robot) * 100 >= step.percent) this.next(robot);
+        else this.next(robot, step.skip + 1);
+        continue;
+      } else if (step.action === 'if_robot_type') {
+        if (robot.kind === step.kind) this.next(robot);
+        else this.next(robot, step.skip + 1);
+        continue;
       } else if (step.action === 'if_site') {
         if (this.nodes.some(node => node.resource === step.resource && node.remaining > 0)) this.next(robot);
+        else this.next(robot, step.skip + 1);
+        continue;
+      } else if (step.action === 'if_drop') {
+        if (this.drops.some(drop => drop.resource === step.resource && drop.amount > 0)) this.next(robot);
         else this.next(robot, step.skip + 1);
         continue;
       }
@@ -318,11 +358,23 @@ export class SalvageSimulation {
     if (robot.phase === 'travel') {
     const entity = this.target(robot) || this.drops.find(drop => drop.id === robot.targetId);
     const target = entity ? (this.target(robot) ? this.blockApproachPoint(robot, entity) : this.dropApproachPoint(robot, entity)) : robot.destination;
-    if (!target) { robot.targetId = null; robot.phase = 'idle'; return; }
+    if (!target) {
+      const task = robot.programTask;
+      robot.targetId = null; robot.phase = 'idle'; robot.programTask = null;
+      if (task) this.next(robot);
+      return;
+    }
       if (!target || (target.remaining !== undefined && target.remaining <= 0)) { robot.targetId = null; robot.phase = 'idle'; return; }
       if (this.moveToward(robot, target, dt, !entity)) {
-        robot.destination = null; robot.phase = 'idle';
-        if (robot.program.length) this.next(robot); else robot.status = 'Waypoint reached';
+        robot.destination = null;
+        if (robot.programTask === 'mine') {
+          robot.phase = 'mining'; robot.work = 0; robot.status = 'Breaking resource block';
+        } else if (robot.programTask === 'pickup') {
+          robot.phase = 'pickup'; robot.status = 'Picking up dropped resource';
+        } else {
+          robot.phase = 'idle'; robot.programTask = null;
+          if (robot.program.length) this.next(robot); else robot.status = 'Waypoint reached';
+        }
         robot.navigationGoal = null; robot.bestDistance = null; robot.stalledTicks = 0;
         this.resetNavigationPath(robot);
       } else if (this.updateNavigationProgress(robot, target)) {
@@ -335,6 +387,30 @@ export class SalvageSimulation {
           robot.status = 'Waiting for a clear route with cargo';
         }
       }
+    } else if (robot.phase === 'mining') {
+      const block = this.target(robot);
+      if (!block || block.remaining <= 0) {
+        robot.targetId = null; robot.phase = 'idle'; robot.programTask = null; this.next(robot); return;
+      }
+      const supported = this.robots.some(other => other.kind === 'buffer_bot' && Math.hypot(other.x - robot.x, other.z - robot.z) <= 2.5);
+      const rate = robot.kind === 'block_miner' ? 2.4 : robot.kind === 'scrap_hound' ? 2 : robot.kind === 'fabricator' ? 1.2 : robot.kind === 'sky_miner' ? .85 : .8;
+      robot.work += dt * rate * (supported ? 1.5 : 1) * (this.upgrades.servo ? 1.25 : 1);
+      while (robot.work >= 1 && block.remaining > 0) { robot.work--; block.remaining--; }
+      if (block.remaining <= 0) {
+        const amount = Math.max(1, Math.ceil(block.stock / 3));
+        this.drops.push({ id: `drop-${block.id}-${this.nextEventId}`, x: block.x, z: block.z, resource: block.resource, amount });
+        block.respawn = block.respawnSeconds;
+        this.recordEvent('block_break', { robotId: robot.id, blockId: block.id, resource: block.resource, amount });
+        robot.targetId = null; robot.programTask = null; robot.phase = 'idle'; robot.status = `Block broken · ${amount} ${block.resource} dropped`; this.next(robot);
+      }
+    } else if (robot.phase === 'pickup') {
+      const drop = this.drops.find(entry => entry.id === robot.targetId && entry.amount > 0);
+      if (!drop) { robot.targetId = null; robot.programTask = null; robot.phase = 'idle'; this.next(robot); return; }
+      const quantity = Math.min(drop.amount, this.capacity(robot) - robot.cargo);
+      robot.cargo += quantity; robot.cargoType = drop.resource; drop.amount -= quantity;
+      this.recordEvent('pickup', { robotId: robot.id, dropId: drop.id, resource: drop.resource, amount: quantity });
+      this.drops = this.drops.filter(entry => entry.amount > 0);
+      robot.targetId = null; robot.programTask = null; robot.phase = 'return'; robot.status = 'Returning with mined resources';
     } else if (robot.phase === 'scan') {
       robot.work -= dt;
       if (robot.work <= 0) {
@@ -482,6 +558,26 @@ export class SalvageSimulation {
       .sort((a, b) => Math.hypot(a.x - robot.x, a.z - robot.z) - Math.hypot(b.x - robot.x, b.z - robot.z))[0];
     if (!block) { robot.status = 'Waiting for available block'; return; }
     robot.targetId = block.id; robot.phase = 'travel'; robot.status = 'Moving to resource block';
+  }
+
+  findDrop(robot, resource) {
+    const assigned = new Set(this.robots.filter(other => other.id !== robot.id && other.targetId !== null).map(other => other.targetId));
+    return this.drops.filter(drop => drop.resource === resource && drop.amount > 0 && !assigned.has(drop.id))
+      .sort((a, b) => Math.hypot(a.x - robot.x, a.z - robot.z) - Math.hypot(b.x - robot.x, b.z - robot.z))[0] || null;
+  }
+
+  stepAssist(robot, dt) {
+    robot.assistTime -= dt;
+    const teammate = this.robots.filter(other => other.id !== robot.id && ['travel', 'mining', 'collect', 'scan'].includes(other.phase))
+      .sort((a, b) => Math.hypot(a.x - robot.x, a.z - robot.z) - Math.hypot(b.x - robot.x, b.z - robot.z))[0];
+    if (teammate) {
+      const destination = { x: teammate.x - .9, z: teammate.z - .9 };
+      this.moveToward(robot, destination, dt, false);
+      robot.status = `Assisting unit ${String(teammate.id + 1).padStart(2, '0')}`;
+    } else robot.status = 'No active teammate · holding position';
+    if (robot.assistTime <= 0) {
+      robot.assistTime = 0; robot.phase = 'idle'; robot.status = 'Support cycle complete'; this.next(robot);
+    }
   }
 
   capacity(robot) { return robot.kind === 'cargo_hauler' ? 8 : robot.kind === 'fabricator' ? 6 : 4; }

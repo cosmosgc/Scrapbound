@@ -34,6 +34,7 @@ class RobotSimulationResolver
                     'phase' => 'idle', 'target' => null, 'destination' => null,
                     'target_drop' => null,
                     'cargo' => 0, 'cargo_type' => 'credits', 'work' => 0.0, 'wait' => 0.0,
+                    'program_task' => null, 'assist_time' => 0.0,
                     'automation' => ! $program || $program === [['action' => 'patrol'], ['action' => 'scan'], ['action' => 'collect', 'resource' => 'credits']],
                     'navigation_goal' => null, 'best_distance' => null, 'stalled_ticks' => 0,
                     'navigation_path_goal' => null, 'navigation_path' => [], 'navigation_path_ready' => false, 'navigation_path_blocked' => false,
@@ -134,6 +135,11 @@ class RobotSimulationResolver
 
             return;
         }
+        if ($robot['phase'] === 'assist') {
+            $this->stepAssist($robot, $dt, $upgrades, $technologyEffects, $nodes, $robots);
+
+            return;
+        }
         $program = $robot['program'];
         if (! $program && $robot['phase'] === 'idle') {
             $robot['status'] = 'Waiting for a program';
@@ -199,6 +205,28 @@ class RobotSimulationResolver
                     $robot['phase'] = 'return';
                     $robot['status'] = 'Returning to base';
                     break;
+                case 'seek':
+                    $target = $this->findSite($robot, $nodes, $step['resource'] ?? 'credits', $robots, $technologyEffects);
+                    if ($target === null) { $robot['status'] = 'No matching salvage site'; return; }
+                    $robot['target'] = $target; $robot['target_drop'] = null; $robot['program_task'] = 'seek';
+                    $robot['phase'] = 'travel'; $robot['status'] = 'Seeking matching salvage site';
+                    break;
+                case 'mine':
+                    $target = $this->findSite($robot, $nodes, $step['resource'] ?? 'credits', $robots, $technologyEffects);
+                    if ($target === null) { $robot['status'] = 'No matching resource block'; return; }
+                    $robot['target'] = $target; $robot['target_drop'] = null; $robot['program_task'] = 'mine';
+                    $robot['phase'] = 'travel'; $robot['status'] = 'Driving to resource block';
+                    break;
+                case 'collect_drops':
+                    $target = $this->findDrop($robot, $drops, $step['resource'] ?? 'scrap', $robots);
+                    if ($target === null) { $robot['status'] = 'No matching salvage drops'; return; }
+                    $robot['target'] = null; $robot['target_drop'] = $target; $robot['program_task'] = 'pickup';
+                    $robot['phase'] = 'travel'; $robot['status'] = 'Driving to dropped resource';
+                    break;
+                case 'assist':
+                    $robot['assist_time'] = (float) ($step['seconds'] ?? 10);
+                    $robot['phase'] = 'assist'; $robot['status'] = 'Looking for a teammate to assist';
+                    break;
                 case 'wait':
                     $robot['wait'] = (float) $step['seconds'];
                     $robot['phase'] = 'wait';
@@ -206,6 +234,18 @@ class RobotSimulationResolver
                     break;
                 case 'if_cargo':
                     $this->next($robot, $robot['cargo'] > 0 ? 1 : $step['skip'] + 1);
+
+                    continue 2;
+                case 'if_full':
+                    $this->next($robot, $robot['cargo'] >= $this->capacity($robot) ? 1 : $step['skip'] + 1);
+
+                    continue 2;
+                case 'if_cargo_percent':
+                    $this->next($robot, $robot['cargo'] / $this->capacity($robot) * 100 >= $step['percent'] ? 1 : $step['skip'] + 1);
+
+                    continue 2;
+                case 'if_robot_type':
+                    $this->next($robot, $robot['kind'] === $step['kind'] ? 1 : $step['skip'] + 1);
 
                     continue 2;
                 case 'if_site':
@@ -219,24 +259,43 @@ class RobotSimulationResolver
                     $this->next($robot, $available ? 1 : $step['skip'] + 1);
 
                     continue 2;
+                case 'if_drop':
+                    $available = false;
+                    foreach ($drops as $drop) {
+                        if ($drop['resource'] === ($step['resource'] ?? 'scrap') && $drop['amount'] > 0) { $available = true; break; }
+                    }
+                    $this->next($robot, $available ? 1 : $step['skip'] + 1);
+
+                    continue 2;
             }
         }
 
         if ($robot['phase'] === 'travel') {
-            $destination = $robot['target'] !== null ? $nodes[$robot['target']] : $robot['destination'];
+            $destination = $robot['target_drop'] !== null
+                ? ($drops[$robot['target_drop']] ?? null)
+                : ($robot['target'] !== null ? ($nodes[$robot['target']] ?? null) : $robot['destination']);
             if ($destination === null || ($robot['target'] !== null && $destination['remaining'] <= 0)) {
-                $robot['target'] = null;
+                $task = $robot['program_task'];
+                $robot['target'] = null; $robot['target_drop'] = null; $robot['program_task'] = null;
                 $robot['phase'] = 'idle';
+                if ($task !== null) $this->next($robot);
 
                 return;
             }
-            if ($robot['target'] !== null) {
+            if ($robot['target_drop'] !== null) {
+                $destination = $this->dropApproachPoint($robot, $destination, $nodes, $technologyEffects) ?? $destination;
+            } elseif ($robot['target'] !== null) {
                 $destination = $this->blockApproachPoint($robot, $nodes[$robot['target']], $nodes, $technologyEffects) ?? $destination;
             }
-            if ($this->moveToward($robot, $destination, $dt, $upgrades, $robots, $technologyEffects, $nodes, $robot['target'] === null)) {
+            if ($this->moveToward($robot, $destination, $dt, $upgrades, $robots, $technologyEffects, $nodes, $robot['target'] === null && $robot['target_drop'] === null)) {
                 $robot['destination'] = null;
-                $robot['phase'] = 'idle';
-                $this->next($robot);
+                if ($robot['program_task'] === 'mine') {
+                    $robot['phase'] = 'mining'; $robot['work'] = 0; $robot['status'] = 'Breaking resource block';
+                } elseif ($robot['program_task'] === 'pickup') {
+                    $robot['phase'] = 'pickup'; $robot['status'] = 'Picking up dropped resource';
+                } else {
+                    $robot['phase'] = 'idle'; $robot['program_task'] = null; $this->next($robot);
+                }
                 $robot['navigation_goal'] = null;
                 $robot['best_distance'] = null;
                 $robot['stalled_ticks'] = 0;
@@ -256,6 +315,40 @@ class RobotSimulationResolver
                     $robot['status'] = 'Waiting for a clear route with cargo';
                 }
             }
+        } elseif ($robot['phase'] === 'mining') {
+            $index = $robot['target'];
+            if ($index === null || ! isset($nodes[$index]) || $nodes[$index]['remaining'] <= 0) {
+                $robot['target'] = null; $robot['program_task'] = null; $robot['phase'] = 'idle'; $this->next($robot);
+
+                return;
+            }
+            $supported = false;
+            foreach ($robots as $other) if ($other['kind'] === 'buffer_bot' && hypot($other['x'] - $robot['x'], $other['z'] - $robot['z']) <= 2.5) $supported = true;
+            $rate = match ($robot['kind']) { 'block_miner' => 2.4, 'scrap_hound' => 2.0, 'fabricator' => 1.2, 'sky_miner' => .85, default => .8 };
+            $robot['work'] += $dt * $rate * ($supported ? 1.5 : 1) * (! empty($upgrades['servo']) ? 1.25 : 1);
+            while ($robot['work'] >= 1 && $nodes[$index]['remaining'] > 0) { $robot['work']--; $nodes[$index]['remaining']--; }
+            if ($nodes[$index]['remaining'] <= 0) {
+                $amount = max(1, (int) ceil($nodes[$index]['stock'] / 3));
+                $dropId = 'drop-'.$nodes[$index]['id'].'-'.count($drops);
+                $drops[$dropId] = ['id' => $dropId, 'x' => $nodes[$index]['x'], 'z' => $nodes[$index]['z'], 'resource' => $nodes[$index]['resource'], 'amount' => $amount];
+                $nodes[$index]['respawn'] = $nodes[$index]['respawn_duration'];
+                $robot['target'] = null; $robot['program_task'] = null; $robot['phase'] = 'idle'; $robot['status'] = "Block broken · {$amount} {$nodes[$index]['resource']} dropped";
+                $this->next($robot);
+            }
+        } elseif ($robot['phase'] === 'pickup') {
+            $dropId = $robot['target_drop'];
+            if ($dropId === null || ! isset($drops[$dropId]) || $drops[$dropId]['amount'] <= 0) {
+                $robot['target_drop'] = null; $robot['program_task'] = null; $robot['phase'] = 'idle'; $this->next($robot);
+
+                return;
+            }
+            $quantity = min($drops[$dropId]['amount'], $this->capacity($robot) - $robot['cargo']);
+            $robot['cargo'] += $quantity; $robot['cargo_type'] = $drops[$dropId]['resource'];
+            $drops[$dropId]['amount'] -= $quantity;
+            if ($drops[$dropId]['amount'] <= 0) unset($drops[$dropId]);
+            $robot['target_drop'] = null; $robot['program_task'] = null; $robot['phase'] = 'return'; $robot['status'] = 'Returning with mined resources';
+        } elseif ($robot['phase'] === 'assist') {
+            $this->stepAssist($robot, $dt, $upgrades, $technologyEffects, $nodes, $robots);
         } elseif ($robot['phase'] === 'scan') {
             $robot['work'] -= $dt;
             if ($robot['work'] <= 0) {
@@ -462,6 +555,44 @@ class RobotSimulationResolver
         usort($ids, fn (int $a, int $b) => hypot($nodes[$a]['x'] - $robot['x'], $nodes[$a]['z'] - $robot['z']) <=> hypot($nodes[$b]['x'] - $robot['x'], $nodes[$b]['z'] - $robot['z']));
 
         return $ids[0] ?? null;
+    }
+
+    private function findDrop(array $robot, array $drops, string $resource, array $robots): ?string
+    {
+        $reserved = [];
+        foreach ($robots as $other) {
+            if ($other['id'] !== $robot['id'] && $other['target_drop'] !== null) $reserved[$other['target_drop']] = true;
+        }
+        $ids = [];
+        foreach ($drops as $id => $drop) {
+            if ($drop['resource'] === $resource && $drop['amount'] > 0 && ! isset($reserved[$id])) $ids[] = $id;
+        }
+        usort($ids, fn (string $left, string $right): int =>
+            hypot($drops[$left]['x'] - $robot['x'], $drops[$left]['z'] - $robot['z']) <=> hypot($drops[$right]['x'] - $robot['x'], $drops[$right]['z'] - $robot['z'])
+        );
+
+        return $ids[0] ?? null;
+    }
+
+    private function stepAssist(array &$robot, float $dt, array $upgrades, array $technologyEffects, array $nodes, array $robots): void
+    {
+        $robot['assist_time'] -= $dt;
+        $teammates = array_values(array_filter($robots, static fn (array $other): bool =>
+            $other['id'] !== $robot['id'] && in_array($other['phase'], ['travel', 'mining', 'collect', 'scan'], true)
+        ));
+        usort($teammates, static fn (array $left, array $right): int =>
+            hypot($left['x'] - $robot['x'], $left['z'] - $robot['z']) <=> hypot($right['x'] - $robot['x'], $right['z'] - $robot['z'])
+        );
+        $teammate = $teammates[0] ?? null;
+        if ($teammate) {
+            $this->moveToward($robot, ['x' => $teammate['x'] - .9, 'z' => $teammate['z'] - .9], $dt, $upgrades, $robots, $technologyEffects, $nodes, false);
+            $robot['status'] = 'Assisting unit '.str_pad((string) ($teammate['id'] + 1), 2, '0', STR_PAD_LEFT);
+        } else {
+            $robot['status'] = 'No active teammate · holding position';
+        }
+        if ($robot['assist_time'] <= 0) {
+            $robot['assist_time'] = 0; $robot['phase'] = 'idle'; $robot['status'] = 'Support cycle complete'; $this->next($robot);
+        }
     }
 
     private function capacity(array $robot): int

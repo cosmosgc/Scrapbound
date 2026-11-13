@@ -1,0 +1,16 @@
+.brain-preset-panel {
+  display: grid;
+  grid-template-columns: minmax(150px, auto) minmax(190px, 1fr) auto minmax(220px, 2fr);
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 14px 18px;
+}
+
+.brain-preset-panel label { color: var(--text, #e8e9dc); font-weight: 700; }
+.brain-preset-panel select { min-width: 0; }
+.brain-preset-panel > span { color: var(--muted, #a2a494); font-size: .82rem; line-height: 1.45; }
+
+@media (max-width: 760px) {
+  .brain-preset-panel { grid-template-columns: 1fr; }
+}

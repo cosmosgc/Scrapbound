@@ -21,26 +21,34 @@ class RobotProgramValidator
             $action = $step['action'];
             $allowed = match ($action) {
                 'patrol', 'scan', 'return_home' => ['action'],
-                'collect' => ['action', 'resource'],
-                'wait' => ['action', 'seconds'],
+                'collect', 'seek', 'mine', 'collect_drops' => ['action', 'resource'],
+                'wait', 'assist' => ['action', 'seconds'],
                 'move_to' => ['action', 'x', 'z'],
-                'if_cargo' => ['action', 'skip'],
-                'if_site' => ['action', 'resource', 'skip'],
+                'if_cargo', 'if_full' => ['action', 'skip'],
+                'if_cargo_percent' => ['action', 'percent', 'skip'],
+                'if_robot_type' => ['action', 'kind', 'skip'],
+                'if_site', 'if_drop' => ['action', 'resource', 'skip'],
                 default => throw new InvalidArgumentException('Unsupported robot instruction.'),
             };
             if (array_diff(array_keys($step), $allowed)) {
                 throw new InvalidArgumentException('Instruction contains unsupported fields.');
             }
-            if (in_array($action, ['collect', 'if_site'], true) && ! in_array($step['resource'] ?? 'credits', ['credits', 'scrap', 'alloy'], true)) {
+            if (in_array($action, ['collect', 'seek', 'mine', 'collect_drops', 'if_site', 'if_drop'], true) && ! in_array($step['resource'] ?? 'credits', ['credits', 'scrap', 'alloy'], true)) {
                 throw new InvalidArgumentException('Resource must be a supported salvage type.');
             }
-            if ($action === 'wait' && (! is_numeric($step['seconds'] ?? null) || $step['seconds'] < 1 || $step['seconds'] > 30)) {
-                throw new InvalidArgumentException('Wait duration must be between 1 and 30 seconds.');
+            if ($action === 'if_robot_type' && ! in_array($step['kind'] ?? null, ['scavenger', 'scrap_hound', 'fabricator', 'sky_miner', 'block_miner', 'cargo_hauler', 'buffer_bot'], true)) {
+                throw new InvalidArgumentException('Robot role must be supported.');
+            }
+            if ($action === 'if_cargo_percent' && (! is_int($step['percent'] ?? null) || $step['percent'] < 1 || $step['percent'] > 100)) {
+                throw new InvalidArgumentException('Cargo threshold must be an integer percentage between 1 and 100.');
+            }
+            if (in_array($action, ['wait', 'assist'], true) && (! is_numeric($step['seconds'] ?? null) || $step['seconds'] < 1 || $step['seconds'] > 30)) {
+                throw new InvalidArgumentException('Wait and assist durations must be between 1 and 30 seconds.');
             }
             if ($action === 'move_to' && (! is_numeric($step['x'] ?? null) || ! is_numeric($step['z'] ?? null) || $step['x'] < -16 || $step['x'] > 16 || $step['z'] < -10 || $step['z'] > 10)) {
                 throw new InvalidArgumentException('Movement destination is outside salvage field bounds.');
             }
-            if (in_array($action, ['if_cargo', 'if_site'], true)) {
+            if (in_array($action, ['if_cargo', 'if_full', 'if_cargo_percent', 'if_robot_type', 'if_site', 'if_drop'], true)) {
                 $skip = $step['skip'] ?? null;
                 if (! is_int($skip) || $skip < 0 || $skip > self::MAX_INSTRUCTIONS || $index + 1 + $skip > count($program)) {
                     throw new InvalidArgumentException('Conditional jump must remain inside the program.');
@@ -49,12 +57,12 @@ class RobotProgramValidator
         }
 
         foreach ($program as $index => $step) {
-            if (! in_array($step['action'] ?? null, ['if_cargo', 'if_site'], true)) {
+            if (! in_array($step['action'] ?? null, ['if_cargo', 'if_full', 'if_cargo_percent', 'if_robot_type', 'if_site', 'if_drop'], true)) {
                 continue;
             }
             $depth = 1;
             foreach ($program as $parentIndex => $parent) {
-                if ($parentIndex >= $index || ! in_array($parent['action'] ?? null, ['if_cargo', 'if_site'], true)) {
+                if ($parentIndex >= $index || ! in_array($parent['action'] ?? null, ['if_cargo', 'if_full', 'if_cargo_percent', 'if_robot_type', 'if_site', 'if_drop'], true)) {
                     continue;
                 }
                 if ($parentIndex + 1 + $parent['skip'] > $index) {

@@ -208,6 +208,14 @@ class RobotSimulationApiTest extends TestCase
         $validator = app(RobotProgramValidator::class);
         $this->assertCount(3, $validator->validateProgram($this->creditProgram()));
         $this->assertCount(1, $validator->validateProgram([['action' => 'move_to', 'x' => 15, 'z' => -8]]));
+        $this->assertCount(8, $validator->validateProgram([
+            ['action' => 'seek', 'resource' => 'scrap'],
+            ['action' => 'mine', 'resource' => 'scrap'], ['action' => 'collect_drops', 'resource' => 'scrap'],
+            ['action' => 'assist', 'seconds' => 10], ['action' => 'if_full', 'skip' => 0],
+            ['action' => 'if_cargo_percent', 'percent' => 75, 'skip' => 0],
+            ['action' => 'if_robot_type', 'kind' => 'block_miner', 'skip' => 0],
+            ['action' => 'if_drop', 'resource' => 'scrap', 'skip' => 0],
+        ]));
 
         try {
             $validator->validateProgram([['action' => 'eval', 'code' => 'bad']]);
@@ -222,6 +230,53 @@ class RobotSimulationApiTest extends TestCase
         } catch (\InvalidArgumentException) {
             $this->assertTrue(true);
         }
+    }
+
+    public function test_specialist_programs_mine_world_blocks_and_deliver_the_visible_drop(): void
+    {
+        $resolver = app(RobotSimulationResolver::class);
+        $program = [
+            ['action' => 'mine', 'resource' => 'scrap'],
+            ['action' => 'collect_drops', 'resource' => 'scrap'],
+        ];
+        $run = $resolver->resolve(
+            ['scavenger' => 0, 'scrap_hound' => 0, 'fabricator' => 0, 'sky_miner' => 0, 'block_miner' => 1, 'cargo_hauler' => 0, 'buffer_bot' => 0],
+            ['crew' => $program], 71, 3000, [], null, config('scrapbound.resources'), [],
+        );
+
+        $this->assertNotEmpty($run['payouts']);
+        $this->assertSame(['scrap'], array_values(array_unique(array_column($run['payouts'], 'cargo_resource'))));
+    }
+
+    public function test_resource_seek_keeps_the_target_for_a_following_scan_and_collect_program(): void
+    {
+        $resolver = app(RobotSimulationResolver::class);
+        $run = $resolver->resolve(
+            ['scavenger' => 1, 'scrap_hound' => 0, 'fabricator' => 0, 'sky_miner' => 0, 'block_miner' => 0, 'cargo_hauler' => 0, 'buffer_bot' => 0],
+            ['crew' => [
+                ['action' => 'seek', 'resource' => 'scrap'], ['action' => 'scan'], ['action' => 'collect', 'resource' => 'scrap'],
+            ]], 71, 1200, [], null, config('scrapbound.resources'), [],
+        );
+
+        $this->assertNotEmpty($run['payouts']);
+        $this->assertSame(['scrap'], array_values(array_unique(array_column($run['payouts'], 'cargo_resource'))));
+    }
+
+    public function test_robot_type_branch_runs_only_for_its_selected_role(): void
+    {
+        $resolver = app(RobotSimulationResolver::class);
+        $program = [
+            ['action' => 'if_robot_type', 'kind' => 'scavenger', 'skip' => 1],
+            ['action' => 'wait', 'seconds' => 20],
+            ['action' => 'seek', 'resource' => 'scrap'],
+        ];
+        $crew = ['scavenger' => 1, 'scrap_hound' => 0, 'fabricator' => 0, 'sky_miner' => 0, 'block_miner' => 0, 'cargo_hauler' => 0, 'buffer_bot' => 0];
+        $matching = $resolver->resolve($crew, ['crew' => $program], 71, 1, [], null, config('scrapbound.resources'), []);
+        $crew['scavenger'] = 0; $crew['block_miner'] = 1;
+        $other = $resolver->resolve($crew, ['crew' => $program], 71, 1, [], null, config('scrapbound.resources'), []);
+
+        $this->assertSame('Waiting', $matching['robots'][0]['status']);
+        $this->assertSame('Seeking matching salvage site', $other['robots'][0]['status']);
     }
 
     public function test_simulation_endpoint_grants_only_server_resolved_deliveries_and_replays_once(): void
